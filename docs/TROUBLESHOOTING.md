@@ -194,13 +194,17 @@ pytest -q
 для локальных клиентов. Для remote-bot это нежелательно, потому что Location
 общего server может относиться к ранее открывавшемуся проекту.
 
-Начиная с исправления `0b62c45`, бот запускает OpenCode так:
+Начиная с исправления `f874477`, бот запускает OpenCode так:
 
 ```text
-opencode run --standalone --dir /absolute/path/to/project --auto ...
+cd /absolute/path/to/project
+opencode run --standalone --auto ...
 ```
 
-Дополнительно Python subprocess получает тот же `cwd` и `PWD`.
+В коде это реализовано через `asyncio.create_subprocess_exec(..., cwd=project)`,
+а переменная окружения `PWD` устанавливается в тот же абсолютный путь.
+Это соответствует установленной у нас версии OpenCode, где `run` поддерживает
+`--standalone`, но не поддерживает `--dir`.
 
 Обновите проект:
 
@@ -211,11 +215,14 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Проверьте поддержку параметров вашей версией OpenCode:
+Проверьте параметры вашей версии OpenCode:
 
 ```bash
-opencode run --help | grep -E -- '--standalone|--dir'
+opencode run --help
 ```
+
+В выводе должен быть `--standalone`. Отсутствие `--dir` для этой сборки
+является нормальным и уже учтено в коде бота.
 
 После обновления перезапустите сервис:
 
@@ -228,7 +235,9 @@ journalctl -u telegram-opencode-bot@$USER.service -n 100 --no-pager
 
 ```bash
 cd ~/projects/alert-centr
-opencode run --standalone --dir "$PWD" "Покажи абсолютный путь активного проекта и перечисли 5 файлов верхнего уровня"
+pwd
+git rev-parse --show-toplevel
+opencode run --standalone "Покажи абсолютный путь активного проекта и перечисли 5 файлов верхнего уровня"
 ```
 
 В Telegram:
