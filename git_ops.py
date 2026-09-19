@@ -34,6 +34,21 @@ async def current_branch(project: Path) -> str:
     return await _git(project, 'branch', '--show-current')
 
 
+async def list_branches(project: Path) -> list[str]:
+    out = await _git(project, 'for-each-ref', '--format=%(refname:short)', 'refs/heads/')
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+async def switch_branch(project: Path, branch: str) -> str:
+    if not branch or any(ch.isspace() for ch in branch):
+        raise GitError('Недопустимое имя ветки.')
+    dirty = await _git(project, 'status', '--porcelain')
+    if dirty:
+        raise GitError('Нельзя переключить ветку: есть незакоммиченные изменения.')
+    await _git(project, 'switch', branch)
+    return await current_branch(project)
+
+
 async def status(project: Path) -> str:
     out = await _git(project, 'status', '--short', '--branch')
     return out or 'Working tree clean.'
@@ -72,3 +87,10 @@ async def push_current(project: Path) -> str:
     if not branch:
         raise GitError('Detached HEAD: push запрещён.')
     return await _git(project, 'push', '-u', 'origin', branch, timeout=180)
+
+
+async def rollback_tracked_changes(project: Path) -> str:
+    before = await status(project)
+    await _git(project, 'restore', '--staged', '--worktree', '--', '.')
+    after = await status(project)
+    return f'До rollback:\n{before}\n\nПосле rollback:\n{after}\n\nUntracked-файлы не удалялись.'
