@@ -1,125 +1,68 @@
-# Творческие возможности без OpenAI API
+# Творческие функции без OpenAI Platform API
 
-Бот больше не использует OpenAI Platform API и не требует `OPENAI_API_KEY`.
+Проект не использует `OPENAI_API_KEY` и не требует отдельного API balance.
 
-Все текстовые AI-задачи выполняются через OpenCode. Для OpenAI рекомендуется авторизовать OpenCode через подписку **ChatGPT Plus/Pro**:
-
-```text
-opencode
-/connect
-OpenAI
-ChatGPT Plus/Pro
-/models
-```
-
-После этого оставьте в `.env`:
-
-```env
-OPENCODE_MODEL=
-```
-
-чтобы бот использовал выбранную/настроенную в OpenCode модель.
+Текстовые AI-функции работают через OpenCode + OpenAI OAuth + ChatGPT account.
 
 ## /presentation
 
-Создаёт редактируемый PowerPoint (.pptx).
-
-Содержание генерируется через OpenCode/ChatGPT, а сам файл собирается локально через `python-pptx`.
-
 ```text
-/presentation 10 | Инвесторская презентация AI Cyber Defense Copilot
+/presentation 10 | Инвесторская презентация продукта
 ```
 
-API credits не используются.
+Содержание создаёт OpenCode/ChatGPT, затем локально создаётся редактируемый `.pptx`.
 
 ## /email
-
-Письмо создаётся через тот же OpenCode/ChatGPT-сеанс:
 
 ```text
 /email Напиши письмо инвестору после встречи
 ```
 
-## /tarot
+Возвращает тему и готовое тело письма.
 
-Карты вытягиваются локально из полной колоды 78 карт, а интерпретация выполняется через OpenCode/ChatGPT:
+## /tarot
 
 ```text
 /tarot 3 | Что важно учитывать завтра?
 ```
 
+Колода из 78 карт хранится локально. Карты выбираются случайно, включая прямое/перевёрнутое положение. Интерпретацию делает OpenCode/ChatGPT.
+
 ## /image
-
-OpenCode умеет передавать изображения модели как вход, но его документированная модель вывода — текст. Поэтому без отдельного image API бот не может честно получить готовый PNG из ChatGPT Plus/Pro через OpenCode.
-
-Команда готовит качественный промпт для генерации изображения в обычном ChatGPT:
 
 ```text
 /image Современный SOC-центр, фотореалистично
 ```
 
-Бот вернёт готовый промпт.
+OpenCode в этой архитектуре используется как текстовый интерфейс и не возвращает бинарный PNG из ChatGPT subscription mode.
+
+Поэтому команда создаёт детальный готовый промпт для генерации изображения в обычном ChatGPT Image.
 
 ## /video
-
-По той же причине OpenCode не предоставляет бинарный video output из подписки ChatGPT Plus/Pro.
-
-Команда:
 
 ```text
 /video Кинематографичный пролёт через дата-центр
 ```
 
-возвращает готовый промпт для ChatGPT/Sora, но не вызывает платный API.
+Команда создаёт готовый промпт для ChatGPT/Sora.
 
-## Ошибка credit_balance_exhausted
+MP4 через OpenAI Platform API не вызывается.
 
-Если бот показывает:
+## Модель
 
-```text
-credit_balance_exhausted
-You have no credits remaining
-```
-
-значит OpenCode всё ещё использует credit/API provider, например OpenCode Zen, а не ChatGPT Plus/Pro OAuth.
-
-Проверьте:
-
-```bash
-opencode auth list
-```
-
-Затем:
-
-```bash
-opencode
-```
-
-и внутри:
-
-```text
-/connect
-```
-
-выберите:
-
-```text
-OpenAI
-ChatGPT Plus/Pro
-```
-
-после OAuth-входа:
-
-```text
-/models
-```
-
-выберите модель OpenAI, доступную по вашей подписке.
-
-Если в `.env` задано `OPENCODE_MODEL` на платный credit-provider, удалите значение:
+Творческие команды используют ту же логику model discovery, что и `/chat`:
 
 ```env
+OPENCODE_PROVIDER=openai
 OPENCODE_MODEL=
 ```
 
-После изменения перезапустите сервис.
+Если модель не задана явно, бот проверяет доступные `openai/*` модели и выбирает первую реально рабочую для текущего OAuth.
+
+## Диагностика
+
+```text
+/provider
+```
+
+Проверяйте эту команду первой, если творческая функция не запускается.
