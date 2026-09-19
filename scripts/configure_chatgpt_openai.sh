@@ -13,9 +13,9 @@ echo "Checking OpenCode auth..."
 "$OPENCODE_BIN" auth list || true
 
 echo
-echo "Available models for provider '$PROVIDER':"
-MODELS="$("$OPENCODE_BIN" models "$PROVIDER" 2>&1 || true)"
-printf '%s\n' "$MODELS"
+echo "Available models (filtering provider '$PROVIDER'):"
+MODELS="$("$OPENCODE_BIN" models 2>&1 || true)"
+printf '%s\n' "$MODELS" | awk -v p="$PROVIDER/" '$1 ~ "^" p'
 
 MODEL="${OPENCODE_MODEL:-}"
 if [[ -z "$MODEL" ]]; then
