@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 from dataclasses import dataclass
@@ -19,6 +20,7 @@ _ANSI_RE = re.compile(
 class RunResult:
     returncode: int
     output: str
+    session_id: str | None = None
 
 
 def _clean_output(raw: bytes) -> str:
@@ -29,18 +31,55 @@ def _clean_output(raw: bytes) -> str:
     return text.strip()
 
 
+def _parse_json_stream(raw: bytes) -> tuple[str, str | None]:
+    texts: list[str] = []
+    session_id: str | None = None
+    fallback: list[str] = []
+
+    for line in raw.decode(errors='replace').splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            fallback.append(line)
+            continue
+
+        if not session_id and isinstance(event, dict):
+            value = event.get('sessionID')
+            if isinstance(value, str) and value:
+                session_id = value
+
+        if isinstance(event, dict) and event.get('type') == 'text':
+            part = event.get('part')
+            if isinstance(part, dict):
+                text = part.get('text')
+                if isinstance(text, str) and text:
+                    texts.append(text)
+
+    output = '\n'.join(texts).strip()
+    if not output:
+        output = '\n'.join(fallback).strip()
+    return output, session_id
+
+
 class OpenCodeRunner:
     def __init__(self, settings: Settings):
         self.settings = settings
 
-    async def run(self, project: Path, mode: str, prompt: str) -> RunResult:
+    async def run(
+        self,
+        project: Path,
+        mode: str,
+        prompt: str,
+        session_id: str | None = None,
+        session_title: str | None = None,
+    ) -> RunResult:
         project = project.resolve()
 
         if not project.is_dir() or not (project / '.git').exists():
-            return RunResult(
-                2,
-                f'OpenCode не запущен: некорректный Git-проект: {project}',
-            )
+            return RunResult(2, f'OpenCode не запущен: некорректный Git-проект: {project}')
 
         env = os.environ.copy()
         env['OPENCODE_CONFIG_CONTENT'] = opencode_config(mode)
@@ -54,18 +93,18 @@ class OpenCodeRunner:
             f'ЗАДАНИЕ ПОЛЬЗОВАТЕЛЯ:\n{prompt.strip()}'
         )
 
-        # The installed OpenCode build supports --standalone for "run",
-        # but does not support --dir. Project selection is therefore pinned
-        # with subprocess cwd, while PWD is kept in sync.
-        #
-        # --standalone prevents reuse of the shared background service and
-        # avoids cross-project session/location leakage.
-        cmd = [
-            self.settings.opencode_bin,
-            'run',
-            '--standalone',
-            '--auto',
-        ]
+        cmd = [self.settings.opencode_bin, 'run', '--standalone', '--auto']
+
+        # For a new named session, JSON mode is used once to capture sessionID.
+        # Existing sessions use normal output because some OpenCode versions
+        # have known JSON streaming issues when resuming long sessions.
+        capture_session = session_id is None
+        if capture_session:
+            cmd += ['--format', 'json']
+            if session_title:
+                cmd += ['--title', session_title]
+        else:
+            cmd += ['--session', session_id]
 
         if self.settings.opencode_model:
             cmd += ['--model', self.settings.opencode_model]
@@ -88,18 +127,21 @@ class OpenCodeRunner:
         except asyncio.TimeoutError:
             proc.kill()
             await proc.communicate()
-            return RunResult(
-                124,
-                'OpenCode остановлен: превышен лимит времени.',
-            )
+            return RunResult(124, 'OpenCode остановлен: превышен лимит времени.', session_id)
 
-        text = _clean_output(stdout)
+        if capture_session:
+            text, discovered_session = _parse_json_stream(stdout)
+            active_session = discovered_session
+        else:
+            text = _clean_output(stdout)
+            active_session = session_id
 
+        text = _clean_output(text.encode())
         if len(text) > self.settings.max_output_chars:
-            text = text[-self.settings.max_output_chars:]
-            text = '[...начало вывода сокращено...]\n' + text
+            text = '[...начало вывода сокращено...]\n' + text[-self.settings.max_output_chars:]
 
         return RunResult(
             proc.returncode or 0,
             text or '(OpenCode не вернул текст)',
+            active_session,
         )
