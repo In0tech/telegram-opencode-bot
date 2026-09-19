@@ -99,6 +99,48 @@ def _parse_json_stream(raw: bytes) -> tuple[str, str | None]:
 class OpenCodeRunner:
     def __init__(self, settings: Settings):
         self.settings = settings
+        self._resolved_model: str | None = None
+
+    async def _resolve_model(
+        self,
+        project: Path,
+        env: dict[str, str],
+    ) -> tuple[str | None, str | None]:
+        if self.settings.opencode_model:
+            return self.settings.opencode_model, None
+
+        if self._resolved_model:
+            return self._resolved_model, None
+
+        provider = self.settings.opencode_provider
+        cmd = [self.settings.opencode_bin, 'models', provider]
+        rc, raw = await self._spawn(project, cmd, env, timeout=30)
+        text = _clean_output(raw)
+
+        if rc != 0:
+            return None, (
+                f'Не удалось получить модели провайдера {provider!r}.\n'
+                f'{text or f"opencode models rc={rc}"}\n\n'
+                'Подключите OpenAI через: opencode → /connect → OpenAI → ChatGPT Plus/Pro.'
+            )
+
+        candidates = []
+        prefix = provider + '/'
+        for line in text.splitlines():
+            value = line.strip()
+            if value.startswith(prefix):
+                candidates.append(value.split()[0])
+
+        if not candidates:
+            return None, (
+                f'У OpenCode нет доступных моделей провайдера {provider!r}.\n'
+                'Это означает, что ChatGPT OAuth не подключён или провайдер недоступен.\n'
+                'Запустите: opencode → /connect → OpenAI → ChatGPT Plus/Pro, '
+                'затем проверьте: opencode models openai'
+            )
+
+        self._resolved_model = candidates[0]
+        return self._resolved_model, None
 
     async def _spawn(
         self,
@@ -221,8 +263,8 @@ class OpenCodeRunner:
             + auth
             + '\n\nOpenAI models:\n'
             + models
-            + '\n\nOPENCODE_MODEL='
-            + (self.settings.opencode_model or '<default>')
+            + '\n\nOPENCODE_PROVIDER=' + self.settings.opencode_provider
+            + '\nOPENCODE_MODEL=' + (self.settings.opencode_model or '<auto from provider>')
         )
 
     async def run_general(
@@ -245,8 +287,10 @@ class OpenCodeRunner:
             '--title',
             f'{session_title}:{uuid.uuid4().hex[:8]}',
         ]
-        if self.settings.opencode_model:
-            cmd += ['--model', self.settings.opencode_model]
+        model, model_error = await self._resolve_model(workspace, env)
+        if model_error:
+            return RunResult(78, model_error, None)
+        cmd += ['--model', model]
         cmd.append(prompt)
 
         rc, stdout = await self._spawn(workspace, cmd, env)
@@ -304,9 +348,11 @@ class OpenCodeRunner:
             discovery_title = f'{base_title}:{uuid.uuid4().hex[:8]}'
             cmd += ['--title', discovery_title]
 
-        if self.settings.opencode_model:
-            cmd += ['--model', self.settings.opencode_model]
+        model, model_error = await self._resolve_model(project, env)
+        if model_error:
+            return RunResult(78, model_error, session_id)
 
+        cmd += ['--model', model]
         cmd.append(full_prompt)
 
         rc, stdout = await self._spawn(project, cmd, env)
