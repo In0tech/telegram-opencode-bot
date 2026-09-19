@@ -41,8 +41,8 @@ GitHub
 - runtime permissions OpenCode v2 через `OPENCODE_CONFIG_CONTENT`;
 - запрет произвольного shell, `sudo`, package install, `git push`, `git commit`, `git merge`, `git reset`, `git clean` внутри AI-агента;
 - автоматическое создание ветки `ai/YYYYMMDD-HHMMSS`, если EXEC запущен из защищённой ветки;
-- `/status`, `/diff`;
-- `/commit MESSAGE` и `/push` только после inline-подтверждения;
+- `/status`, `/diff`, `/tests`, `/logs`;
+- `/commit MESSAGE` и `/push` только после inline-подтверждения;\n- `/pr [TITLE]` — создание GitHub Pull Request через `gh`;\n- `/branch` — просмотр и интерактивное переключение веток;\n- `/rollback` — подтверждаемый откат tracked-изменений без удаления untracked-файлов;\n- интерактивный выбор проекта кнопками;\n- именованные долговременные OpenCode-сессии (`/sessions`, `/newsession`, `/session`), сохраняемые на диск;
 - один OpenCode task одновременно на пользователя;
 - timeout выполнения;
 - ограничение размера Telegram-ответов;
@@ -167,3 +167,20 @@ pytest -q
 ## Лицензия
 
 Внутренний проект. Репозиторий рекомендуется хранить приватным.
+
+
+## Расширенные команды
+
+```text
+/projects
+/branch
+/tests
+/logs 100
+/newsession backend
+/session backend
+/sessions
+/pr
+/rollback
+```
+
+`/projects` и `/branch` поддерживают inline-кнопки. `/pr` требует установленный и авторизованный GitHub CLI (`gh auth login`). Именованные OpenCode-сессии сохраняются в `STATE_DIR/sessions.json` и продолжаются через `opencode run --session <id>`. OpenCode документирует `--session` и JSON output для automation.\n
