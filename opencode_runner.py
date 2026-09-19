@@ -111,13 +111,23 @@ class OpenCodeRunner:
 
         cmd.append(full_prompt)
 
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            cwd=str(project),
-            env=env,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                cwd=str(project),
+                env=env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+        except FileNotFoundError:
+            return RunResult(
+                127,
+                'OpenCode не найден. Проверенный путь: '
+                f'{self.settings.opencode_bin}. '
+                'Проверьте "which opencode" и при необходимости задайте '
+                'OPENCODE_BIN=/полный/путь/к/opencode в .env.',
+                session_id,
+            )
 
         try:
             stdout, _ = await asyncio.wait_for(
