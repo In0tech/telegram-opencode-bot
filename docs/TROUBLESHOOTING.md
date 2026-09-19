@@ -1,278 +1,33 @@
 # Диагностика
 
-## opencode: command not found
-
-Проверка:
+## Быстрый чек
 
 ```bash
-which opencode
-echo "$PATH"
-```
+cd ~/telegram-opencode-bot
 
-Для OpenCode v2:
+git status
+git log --oneline -5
 
-```bash
-curl -fsSL https://opencode.ai/v2/install | bash
-source ~/.bashrc
+command -v opencode
 opencode --version
-```
+opencode auth list
+opencode models
 
-Либо:
-
-```bash
-npm install -g @opencode/cli
-```
-
-## curl installer не работает
-
-Проверьте:
-
-```bash
-sudo apt update
-sudo apt install -y curl ca-certificates
-
-curl -Iv https://opencode.ai
-curl -L https://opencode.ai/v2/install | head
-```
-
-Если есть TLS/DNS timeout, проблема находится ниже уровня installer: сеть, DNS, proxy/VPN/firewall или сертификаты.
-
-## TELEGRAM_BOT_TOKEN is not set
-
-Убедитесь, что файл существует:
-
-```bash
-cd ~/telegram-opencode-bot
-ls -la .env
-grep '^TELEGRAM_BOT_TOKEN=' .env
-```
-
-Не публикуйте значение token.
-
-## ALLOWED_TELEGRAM_USER_IDS is not set
-
-В `.env` должен находиться numeric Telegram ID:
-
-```env
-ALLOWED_TELEGRAM_USER_IDS=123456789
-```
-
-## Бот отвечает «Доступ запрещён»
-
-Telegram User ID отправителя отсутствует в allowlist. Исправьте `.env` и перезапустите сервис:
-
-```bash
-sudo systemctl restart telegram-opencode-bot@$USER.service
-```
-
-## /projects ничего не показывает
-
-Проверьте `PROJECT_ROOT`:
-
-```bash
-grep '^PROJECT_ROOT=' ~/telegram-opencode-bot/.env
-ls -la ~/projects
-```
-
-Каждый проект должен иметь `.git`:
-
-```bash
-ls -la ~/projects/xenoeye/.git
-```
-
-## OpenCode работает вручную, но бот падает
-
-Запустите бота foreground:
-
-```bash
-cd ~/telegram-opencode-bot
-source .venv/bin/activate
-python bot.py
-```
-
-Для systemd:
-
-```bash
-journalctl -u telegram-opencode-bot@$USER.service -n 200 --no-pager
-```
-
-## systemd service не запускается
-
-Проверка:
-
-```bash
 systemctl status telegram-opencode-bot@$USER.service
 journalctl -u telegram-opencode-bot@$USER.service -n 100 --no-pager
-```
-
-Убедитесь, что проект находится именно здесь:
-
-```text
-/home/YOUR_USER/telegram-opencode-bot
-```
-
-Unit template рассчитан на этот путь.
-
-## systemctl: System has not been booted with systemd
-
-В Ubuntu:
-
-```bash
-sudo nano /etc/wsl.conf
-```
-
-```ini
-[boot]
-systemd=true
-```
-
-В Windows PowerShell:
-
-```powershell
-wsl --shutdown
-```
-
-После повторного запуска Ubuntu:
-
-```bash
-systemctl status
-```
-
-## git push запрашивает пароль или завершается ошибкой
-
-Настройте GitHub credentials через `gh auth login` либо SSH.
-
-Проверка remote:
-
-```bash
-git remote -v
-```
-
-## EXEC создаёт новую ai/* ветку
-
-Это ожидаемое поведение, если активная ветка входит в `PROTECTED_BRANCHES`.
-
-Проверка:
-
-```bash
-git branch --show-current
-```
-
-## Задание превышает timeout
-
-Увеличьте:
-
-```env
-TASK_TIMEOUT_SECONDS=3600
-```
-
-После изменения перезапустите bot/service.
-
-## Проверка Python-тестов проекта
-
-```bash
-cd ~/telegram-opencode-bot
-source .venv/bin/activate
-pip install pytest
-pytest -q
-```
-
-
-## Бот показывает один проект, а OpenCode читает другой
-
-Симптом:
-
-```text
-Запускаю PLAN
-Проект: alert-centr
-```
-
-но в выводе OpenCode появляются файлы другого репозитория, например
-`telegram-opencode-bot/bot.py`, `security.py` и т. п.
-
-Причина: OpenCode v2 по умолчанию может использовать общий background server
-для локальных клиентов. Для remote-bot это нежелательно, потому что Location
-общего server может относиться к ранее открывавшемуся проекту.
-
-Начиная с исправления `f874477`, бот запускает OpenCode так:
-
-```text
-cd /absolute/path/to/project
-opencode run --standalone --auto ...
-```
-
-В коде это реализовано через `asyncio.create_subprocess_exec(..., cwd=project)`,
-а переменная окружения `PWD` устанавливается в тот же абсолютный путь.
-Это соответствует установленной у нас версии OpenCode, где `run` поддерживает
-`--standalone`, но не поддерживает `--dir`.
-
-Обновите проект:
-
-```bash
-cd ~/telegram-opencode-bot
-git pull
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-Проверьте параметры вашей версии OpenCode:
-
-```bash
-opencode run --help
-```
-
-В выводе должен быть `--standalone`. Отсутствие `--dir` для этой сборки
-является нормальным и уже учтено в коде бота.
-
-После обновления перезапустите сервис:
-
-```bash
-sudo systemctl restart telegram-opencode-bot@$USER.service
-journalctl -u telegram-opencode-bot@$USER.service -n 100 --no-pager
-```
-
-Проверьте вручную тот же проект:
-
-```bash
-cd ~/projects/alert-centr
-pwd
-git rev-parse --show-toplevel
-opencode run --standalone "Покажи абсолютный путь активного проекта и перечисли 5 файлов верхнего уровня"
 ```
 
 В Telegram:
 
 ```text
-/project alert-centr
-/plan В начале ответа укажи абсолютный путь активного проекта, затем опиши его структуру. Ничего не меняй.
+/provider
 ```
 
-Если путь не `~/projects/alert-centr`, проверьте:
+## [Errno 2] No such file or directory: opencode
 
-```bash
-grep '^PROJECT_ROOT=' ~/telegram-opencode-bot/.env
-realpath ~/projects/alert-centr
-git -C ~/projects/alert-centr rev-parse --show-toplevel
-```
+Причина: systemd не видел пользовательский `PATH`.
 
-## В Telegram видны [0m и другие управляющие последовательности
-
-Это ANSI/VT100-коды форматирования терминала из stdout OpenCode.
-Начиная с исправления `0b62c45`, `opencode_runner.py` удаляет их перед
-отправкой текста в Telegram.
-
-
-## [Errno 2] No such file or directory: 'opencode'
-
-Симптом в Telegram:
-
-```text
-Ошибка выполнения: [Errno 2] No such file or directory: 'opencode'
-```
-
-Причина: бот запущен через systemd, а PATH systemd отличается от PATH интерактивного shell. OpenCode, установленный curl/npm/pnpm/bun, часто лежит в пользовательском каталоге.
-
-Начиная с исправления `e8b58e3`, бот автоматически ищет OpenCode в:
+Бот умеет искать OpenCode в:
 
 ```text
 ~/.opencode/bin/opencode
@@ -284,145 +39,187 @@ git -C ~/projects/alert-centr rev-parse --show-toplevel
 /usr/bin/opencode
 ```
 
-Также обновлён systemd unit.
-
-Сначала узнайте фактический путь:
-
-```bash
-which opencode
-command -v opencode
-readlink -f "$(command -v opencode)"
-opencode --version
-```
-
-Если путь нестандартный, задайте его явно в `.env`:
+Для максимальной надёжности:
 
 ```env
-OPENCODE_BIN=/полный/путь/к/opencode
+OPENCODE_BIN=/home/YOUR_USER/.opencode/bin/opencode
 ```
 
-После обновления проекта ОБЯЗАТЕЛЬНО переустановите unit:
+После обновления unit:
 
 ```bash
-cd ~/telegram-opencode-bot
-git pull
-
 sudo cp systemd/telegram-opencode-bot.service \
   /etc/systemd/system/telegram-opencode-bot@.service
-
 sudo systemctl daemon-reload
 sudo systemctl restart telegram-opencode-bot@$USER.service
 ```
 
-Проверьте окружение systemd:
+## opencode models openai → Unexpected positional argument
+
+В старой версии OpenCode это ожидаемо.
+
+Не используйте:
 
 ```bash
-systemctl show telegram-opencode-bot@$USER.service -p Environment
+opencode models openai
 ```
 
-Проверьте лог:
+Используйте:
 
 ```bash
-journalctl -u telegram-opencode-bot@$USER.service -n 100 --no-pager
+opencode models
 ```
 
-Если OpenCode всё ещё не находится, рекомендуется указать абсолютный путь через `OPENCODE_BIN`.
+Бот сам фильтрует строки `openai/...`.
 
-
-## OpenCode выбирает jev-1.13-free и зависает с Error: Transport
+## OpenCode выбирает jev-1.13-free
 
 Симптом:
 
 ```text
 > build · jev-1.13-free
-> build · jev-1.13-free
 ...
 Error: Transport
 ```
 
-Это означает, что новый `opencode run` использует последнюю/fallback модель вместо OpenAI ChatGPT OAuth.
+Причина: OpenCode использует последнюю/fallback модель вместо OpenAI.
 
-OpenCode выбирает модель в порядке: `--model`, затем `model` из config, затем последняя использованная модель, затем fallback.
+Исправление:
 
-После обновления бот принудительно использует провайдера из:
+```bash
+cd ~/telegram-opencode-bot
+git pull
+chmod +x scripts/configure_chatgpt_openai.sh
+./scripts/configure_chatgpt_openai.sh
+```
+
+В `.env`:
 
 ```env
 OPENCODE_PROVIDER=openai
 OPENCODE_MODEL=
 ```
 
-При пустом `OPENCODE_MODEL` бот выполняет:
+## credit_balance_exhausted
 
-```bash
-opencode models openai
-```
-
-и передаёт найденную модель явно через `--model openai/...`.
-
-Для исправления обычного CLI выполните:
-
-```bash
-cd ~/telegram-opencode-bot
-chmod +x scripts/configure_chatgpt_openai.sh
-./scripts/configure_chatgpt_openai.sh
-```
-
-Скрипт записывает выбранную OpenAI-модель как default в:
+Симптом:
 
 ```text
-~/.config/opencode/opencode.json
+credit_balance_exhausted
+You have no credits remaining
 ```
 
-и ограничивает автоматический выбор провайдером OpenAI.
+Это означает, что используется credit/API provider, а не ChatGPT account OAuth.
 
-Если скрипт не находит ни одной `openai/...` модели, сначала:
+Проверьте:
 
 ```bash
+opencode auth list
+```
+
+Если OpenAI не подключён:
+
+```text
 opencode
-```
-
-затем внутри:
-
-```text
 /connect
 OpenAI
 ChatGPT Plus/Pro
 ```
 
-После OAuth:
+OpenAI Platform API key этому проекту не нужен.
 
-```text
-/models
-```
+## gpt-5.3-codex-spark is not supported with a ChatGPT account
 
-и повторите setup script.
+Модель присутствует в списке, но недоступна для текущего ChatGPT-account режима.
 
+Новая логика не выбирает первую модель вслепую. Бот и setup-скрипт пробуют модели по очереди и выбирают первую реально рабочую.
 
-## Первая OpenAI-модель из списка не поддерживается ChatGPT account
+## Telegram: rc=78 и «нет моделей openai/*»
 
-Симптом:
-
-```text
-Error: The 'gpt-5.3-codex-spark' model is not supported when using Codex with a ChatGPT account.
-```
-
-Это означает, что модель присутствует в общем списке `opencode models`, но недоступна в режиме ChatGPT-account OAuth.
-
-Начиная с исправления `e55b27b`, бот больше не выбирает первую модель вслепую. Он:
-
-1. получает `opencode models`;
-2. фильтрует `openai/...`;
-3. предпочитает обычные ChatGPT-модели над `codex`;
-4. по очереди запускает короткий probe;
-5. сохраняет первую реально рабочую модель.
-
-Setup-скрипт делает то же самое:
+Если в shell:
 
 ```bash
-cd ~/telegram-opencode-bot
-git pull
-chmod +x scripts/configure_chatgpt_openai.sh
-./scripts/configure_chatgpt_openai.sh
+opencode models
 ```
 
-Если ни одна модель не проходит probe, проблема уже в OpenAI OAuth/доступе аккаунта, а не в выборе модели.
+показывает `openai/*`, а Telegram нет — проблема была в runtime config/systemd environment.
+
+Исправления:
+
+- discovery моделей идёт без `OPENCODE_CONFIG_CONTENT`;
+- OAuth discovery использует реальные `HOME/XDG_*`;
+- systemd unit явно задаёт:
+
+```text
+HOME=/home/%i
+XDG_CONFIG_HOME=/home/%i/.config
+XDG_DATA_HOME=/home/%i/.local/share
+XDG_STATE_HOME=/home/%i/.local/state
+```
+
+После обновления обязательно:
+
+```bash
+sudo cp systemd/telegram-opencode-bot.service \
+  /etc/systemd/system/telegram-opencode-bot@.service
+sudo systemctl daemon-reload
+sudo systemctl restart telegram-opencode-bot@$USER.service
+```
+
+Проверка окружения:
+
+```bash
+systemctl show telegram-opencode-bot@$USER.service -p Environment
+```
+
+## OpenCode работает в shell, но не в systemd
+
+Проверьте от имени того же пользователя:
+
+```bash
+sudo -u "$USER" env \
+  HOME="$HOME" \
+  XDG_CONFIG_HOME="$HOME/.config" \
+  XDG_DATA_HOME="$HOME/.local/share" \
+  XDG_STATE_HOME="$HOME/.local/state" \
+  "$(command -v opencode)" auth list
+```
+
+и:
+
+```bash
+sudo -u "$USER" env \
+  HOME="$HOME" \
+  XDG_CONFIG_HOME="$HOME/.config" \
+  XDG_DATA_HOME="$HOME/.local/share" \
+  XDG_STATE_HOME="$HOME/.local/state" \
+  "$(command -v opencode)" models
+```
+
+## Бот показывает другой проект
+
+OpenCode запускается через `--standalone`, `cwd=project` и `PWD=project`.
+
+Не добавляйте `--dir`: ваша версия OpenCode его не поддерживает.
+
+## Git pull блокируется локальными изменениями
+
+```bash
+git status
+git stash push -m "local changes"
+git pull
+```
+
+Не возвращайте stash автоматически, если upstream уже содержит исправленную версию того же файла.
+
+## Логи
+
+```bash
+journalctl -u telegram-opencode-bot@$USER.service -n 200 --no-pager
+```
+
+или в Telegram:
+
+```text
+/logs 200
+```
