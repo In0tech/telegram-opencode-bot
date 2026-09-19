@@ -61,15 +61,6 @@ class Settings:
     protected_branches: frozenset[str]
     log_level: str
 
-    openai_api_key: str | None
-    openai_text_model: str
-    openai_image_model: str
-    openai_image_size: str
-    openai_image_quality: str
-    openai_video_model: str
-    openai_video_size: str
-    openai_video_seconds: int
-    video_timeout_seconds: int
 
     @classmethod
     def from_env(cls) -> 'Settings':
@@ -95,9 +86,6 @@ class Settings:
             ).split(',') if x.strip()
         )
 
-        video_seconds = int(os.getenv('OPENAI_VIDEO_SECONDS', '8'))
-        if video_seconds not in {4, 8, 12}:
-            raise RuntimeError('OPENAI_VIDEO_SECONDS must be 4, 8 or 12')
 
         return cls(
             telegram_bot_token=token,
@@ -111,13 +99,4 @@ class Settings:
             max_output_chars=int(os.getenv('MAX_OUTPUT_CHARS', '16000')),
             protected_branches=protected,
             log_level=os.getenv('LOG_LEVEL', 'INFO').upper(),
-            openai_api_key=os.getenv('OPENAI_API_KEY', '').strip() or None,
-            openai_text_model=os.getenv('OPENAI_TEXT_MODEL', 'gpt-5.6-luna').strip(),
-            openai_image_model=os.getenv('OPENAI_IMAGE_MODEL', 'gpt-image-2').strip(),
-            openai_image_size=os.getenv('OPENAI_IMAGE_SIZE', '1536x1024').strip(),
-            openai_image_quality=os.getenv('OPENAI_IMAGE_QUALITY', 'medium').strip(),
-            openai_video_model=os.getenv('OPENAI_VIDEO_MODEL', 'sora-2').strip(),
-            openai_video_size=os.getenv('OPENAI_VIDEO_SIZE', '1280x720').strip(),
-            openai_video_seconds=video_seconds,
-            video_timeout_seconds=int(os.getenv('VIDEO_TIMEOUT_SECONDS', '900')),
         )
