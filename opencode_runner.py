@@ -179,6 +179,61 @@ class OpenCodeRunner:
                 return session_id
         return None
 
+    def _decorate_provider_error(self, text: str) -> str:
+        lowered = text.lower()
+        if 'credit_balance_exhausted' in lowered or 'no credits remaining' in lowered:
+            return (
+                text
+                + '\n\n'
+                + 'Этот OpenCode-сеанс использует платный API/credit provider. '
+                  'Для работы через подписку ChatGPT Plus/Pro без Platform API credits '
+                  'запустите OpenCode интерактивно, выполните /connect → OpenAI → '
+                  'ChatGPT Plus/Pro, затем /models и выберите модель OpenAI. '
+                  'В .env оставьте OPENCODE_MODEL пустым, если хотите использовать '
+                  'выбранную в OpenCode модель по умолчанию.'
+            )
+        return text
+
+    async def run_general(
+        self,
+        prompt: str,
+        session_title: str = 'telegram-general',
+    ) -> RunResult:
+        workspace = (self.settings.state_dir / 'chatgpt-workspace').resolve()
+        workspace.mkdir(parents=True, exist_ok=True)
+
+        env = os.environ.copy()
+        env['OPENCODE_CONFIG_CONTENT'] = opencode_config('chat')
+        env['PWD'] = str(workspace)
+
+        cmd = [
+            self.settings.opencode_bin,
+            'run',
+            '--standalone',
+            '--auto',
+            '--title',
+            f'{session_title}:{uuid.uuid4().hex[:8]}',
+        ]
+        if self.settings.opencode_model:
+            cmd += ['--model', self.settings.opencode_model]
+        cmd.append(prompt)
+
+        rc, stdout = await self._spawn(workspace, cmd, env)
+        text = _clean_output(stdout)
+
+        if rc == 124:
+            text = 'OpenCode остановлен: превышен лимит времени.'
+
+        text = self._decorate_provider_error(text)
+
+        if len(text) > self.settings.max_output_chars:
+            text = '[...начало вывода сокращено...]\n' + text[-self.settings.max_output_chars:]
+
+        if not text:
+            text = f'OpenCode завершился без текстового вывода. Код возврата: {rc}.'
+
+        return RunResult(rc, text, None)
+
     async def run(
         self,
         project: Path,
@@ -245,6 +300,8 @@ class OpenCodeRunner:
 
         if rc == 124:
             text = 'OpenCode остановлен: превышен лимит времени.'
+
+        text = self._decorate_provider_error(text)
 
         if len(text) > self.settings.max_output_chars:
             text = '[...начало вывода сокращено...]\n' + text[-self.settings.max_output_chars:]
