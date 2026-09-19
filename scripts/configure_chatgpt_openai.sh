@@ -45,14 +45,13 @@ CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
 CONFIG_FILE="$CONFIG_DIR/opencode.json"
 mkdir -p "$CONFIG_DIR"
 
-python3 - "$CONFIG_FILE" "$MODEL" "$PROVIDER" <<'PY'
+python3 - "$CONFIG_FILE" "$MODEL" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
 model = sys.argv[2]
-provider = sys.argv[3]
 
 data = {}
 if path.exists():
@@ -68,7 +67,6 @@ if path.exists():
 
 data["$schema"] = "https://opencode.ai/config.json"
 data["model"] = model
-data["enabled_providers"] = [provider]
 
 path.write_text(
     json.dumps(data, ensure_ascii=False, indent=2) + "\n",
@@ -76,7 +74,6 @@ path.write_text(
 )
 print(f"Configured {path}")
 print(f"model={model}")
-print(f"enabled_providers=[{provider}]")
 PY
 
 echo
