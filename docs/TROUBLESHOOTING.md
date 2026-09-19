@@ -396,3 +396,33 @@ ChatGPT Plus/Pro
 ```
 
 и повторите setup script.
+
+
+## Первая OpenAI-модель из списка не поддерживается ChatGPT account
+
+Симптом:
+
+```text
+Error: The 'gpt-5.3-codex-spark' model is not supported when using Codex with a ChatGPT account.
+```
+
+Это означает, что модель присутствует в общем списке `opencode models`, но недоступна в режиме ChatGPT-account OAuth.
+
+Начиная с исправления `e55b27b`, бот больше не выбирает первую модель вслепую. Он:
+
+1. получает `opencode models`;
+2. фильтрует `openai/...`;
+3. предпочитает обычные ChatGPT-модели над `codex`;
+4. по очереди запускает короткий probe;
+5. сохраняет первую реально рабочую модель.
+
+Setup-скрипт делает то же самое:
+
+```bash
+cd ~/telegram-opencode-bot
+git pull
+chmod +x scripts/configure_chatgpt_openai.sh
+./scripts/configure_chatgpt_openai.sh
+```
+
+Если ни одна модель не проходит probe, проблема уже в OpenAI OAuth/доступе аккаунта, а не в выборе модели.
