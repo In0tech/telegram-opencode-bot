@@ -475,61 +475,77 @@ TEST_TIMEOUT_SECONDS=900
 ```
 
 
-## Настройка творческих функций
+## Настройка ChatGPT Plus/Pro в OpenCode
 
-После обновления зависимостей:
+Бот не использует OpenAI Platform API и не требует API credits.
+
+Запустите OpenCode:
 
 ```bash
-cd ~/telegram-opencode-bot
-source .venv/bin/activate
-pip install -r requirements.txt
+opencode
 ```
 
-Добавьте API key в `.env`:
+Внутри выполните:
+
+```text
+/connect
+```
+
+Выберите:
+
+```text
+OpenAI
+ChatGPT Plus/Pro
+```
+
+Откроется браузер для OAuth-входа в ваш ChatGPT аккаунт.
+
+После успешной авторизации:
+
+```text
+/models
+```
+
+выберите модель OpenAI, доступную по вашей подписке.
+
+Проверьте из shell:
+
+```bash
+opencode auth list
+opencode models openai
+```
+
+В `.env` рекомендуется оставить:
 
 ```env
-OPENAI_API_KEY=sk-...
+OPENCODE_MODEL=
 ```
 
-Проверьте, что ключ не попал в Git:
+Если хотите зафиксировать конкретную модель, возьмите её точное имя из:
 
 ```bash
-git status --ignored
+opencode models openai
 ```
 
-Перезапустите бота:
+и задайте, например:
+
+```env
+OPENCODE_MODEL=openai/<точное-имя-модели>
+```
+
+После настройки:
 
 ```bash
 sudo systemctl restart telegram-opencode-bot@$USER.service
 ```
 
-Затем проверьте:
+Тест в Telegram:
 
 ```text
+/chat Ответь одним словом: OK
 /email Напиши короткое тестовое письмо
 /tarot Общий расклад на день
-/image Минималистичный футуристичный серверный зал
 /presentation 5 | Тестовая презентация про кибербезопасность
 ```
 
-Команда `/video` использует deprecated Sora API, который OpenAI планирует отключить 24.09.2026.
-
-
-## OpenCode и systemd PATH
-
-После установки OpenCode проверьте абсолютный путь:
-
-```bash
-command -v opencode
-readlink -f "$(command -v opencode)"
-```
-
-Бот автоматически ищет OpenCode в популярных пользовательских каталогах. Для максимальной предсказуемости можно записать абсолютный путь в `.env`:
-
-```env
-OPENCODE_BIN=/home/YOUR_USER/.opencode/bin/opencode
-```
-
-Если `command -v opencode` показывает другой путь — используйте именно его.
-
-После изменения unit-файла из репозитория недостаточно обычного restart; сначала скопируйте новый unit и выполните `daemon-reload`.
+Команды `/image` и `/video` без API готовят промпты для генерации в обычном ChatGPT, потому что OpenCode документирует text output и не предоставляет бинарный image/video output из ChatGPT Plus/Pro.
