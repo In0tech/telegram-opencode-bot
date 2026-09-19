@@ -18,13 +18,44 @@ MODELS="$("$OPENCODE_BIN" models 2>&1 || true)"
 printf '%s\n' "$MODELS" | awk -v p="$PROVIDER/" '$1 ~ "^" p'
 
 MODEL="${OPENCODE_MODEL:-}"
+
 if [[ -z "$MODEL" ]]; then
-  MODEL="$(printf '%s\n' "$MODELS" | awk -v p="$PROVIDER/" '$1 ~ "^" p {print $1; exit}')"
+  mapfile -t CANDIDATES < <(
+    printf '%s\n' "$MODELS" |
+      awk -v p="$PROVIDER/" '$1 ~ "^" p {print $1}' |
+      awk '!seen[$0]++' |
+      awk '
+        /gpt-5\.6-sol/ && !/-fast$/ {print "00 " $0; next}
+        /gpt-5\.6-luna/ && !/-fast$/ {print "01 " $0; next}
+        /gpt-5\.5$/ {print "02 " $0; next}
+        /gpt-6-astra/ && !/-fast$/ {print "03 " $0; next}
+        /codex/ {print "90 " $0; next}
+        {print "50 " $0}
+      ' |
+      sort |
+      cut -d' ' -f2-
+  )
+
+  echo
+  echo "Probing models with the current ChatGPT/OpenAI auth..."
+  for candidate in "${CANDIDATES[@]}"; do
+    echo "  trying $candidate"
+    set +e
+    OUTPUT="$("$OPENCODE_BIN" run --standalone --model "$candidate" "Ответь одним словом: OK" 2>&1)"
+    RC=$?
+    set -e
+    if [[ $RC -eq 0 ]]; then
+      MODEL="$candidate"
+      echo "  OK: $candidate"
+      break
+    fi
+    printf '  failed: %s\n' "$OUTPUT" | tail -n 3
+  done
 fi
 
 if [[ -z "$MODEL" ]]; then
   cat >&2 <<EOF
-No $PROVIDER model was found.
+No OpenAI model worked with the current ChatGPT account authentication.
 
 Run:
   opencode
