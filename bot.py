@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from logging.handlers import RotatingFileHandler
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
@@ -15,18 +16,45 @@ from telegram.ext import (
 )
 
 from config import Settings
-from git_ops import GitError, commit_all, current_branch, diff, ensure_work_branch, push_current, status
+from git_ops import (
+    GitError,
+    commit_all,
+    current_branch,
+    diff,
+    ensure_work_branch,
+    list_branches,
+    push_current,
+    rollback_tracked_changes,
+    status,
+    switch_branch,
+)
+from github_ops import create_pr
 from opencode_runner import OpenCodeRunner
 from projects import ProjectError, list_projects, resolve_project
+from session_store import SessionStore
+from test_runner import TestRunError, run_tests
 
 settings = Settings.from_env()
+
+log_file = settings.state_dir / 'bot.log'
+handlers: list[logging.Handler] = [logging.StreamHandler()]
+handlers.append(
+    RotatingFileHandler(
+        log_file,
+        maxBytes=2_000_000,
+        backupCount=3,
+        encoding='utf-8',
+    )
+)
 logging.basicConfig(
     level=getattr(logging, settings.log_level, logging.INFO),
     format='%(asctime)s %(levelname)s %(name)s: %(message)s',
+    handlers=handlers,
 )
+
 log = logging.getLogger('telegram-opencode-bot')
 runner = OpenCodeRunner(settings)
-
+sessions = SessionStore(settings.state_dir / 'sessions.json')
 locks: dict[int, asyncio.Lock] = {}
 
 
@@ -48,8 +76,13 @@ def active_project_name(context: ContextTypes.DEFAULT_TYPE) -> str | None:
 def active_project(context: ContextTypes.DEFAULT_TYPE):
     name = active_project_name(context)
     if not name:
-        raise ProjectError('Сначала выберите проект: /projects → /project NAME')
+        raise ProjectError('Сначала выберите проект: /projects → кнопка проекта')
     return resolve_project(settings.project_root, name)
+
+
+def active_session_name(context: ContextTypes.DEFAULT_TYPE) -> str:
+    value = context.user_data.get('session_name')
+    return value if isinstance(value, str) and value else 'default'
 
 
 async def send_long(update: Update, text: str) -> None:
@@ -66,48 +99,142 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return await deny(update)
     await update.effective_message.reply_text(
         'OpenCode Remote Bot готов.\n\n'
-        '/projects — список проектов\n'
-        '/project NAME — выбрать проект\n'
-        '/chat TEXT — анализ без изменений\n'
+        '/projects — выбрать проект кнопкой\n'
+        '/project NAME — выбрать проект текстом\n'
+        '/sessions — сессии OpenCode текущего проекта\n'
+        '/newsession NAME — новая долговременная сессия\n'
+        '/session NAME — переключить сессию\n'
+        '/chat TEXT — анализ\n'
         '/plan TEXT — план без изменений\n'
-        '/exec TEXT — изменить код/запустить разрешённые тесты\n'
+        '/exec TEXT — изменение кода\n'
+        '/tests [python|npm|pnpm|go|cargo] — запустить тесты\n'
         '/status — git status\n'
         '/diff — git diff\n'
-        '/commit MESSAGE — запросить подтверждение commit\n'
-        '/push — запросить подтверждение push\n'
-        '/cancel — забыть ожидающее подтверждение\n\n'
-        'Обычное сообщение работает как /chat.'
+        '/branch [NAME] — ветки / переключение\n'
+        '/commit MESSAGE — commit с подтверждением\n'
+        '/push — push с подтверждением\n'
+        '/pr [TITLE] — создать GitHub Pull Request\n'
+        '/rollback — откатить tracked-изменения с подтверждением\n'
+        '/logs [N] — последние строки лога бота\n'
+        '/cancel — отменить ожидающее подтверждение'
     )
 
 
 async def projects_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not authorized(update):
         return await deny(update)
+
     items = list_projects(settings.project_root)
     if not items:
         return await update.effective_message.reply_text(
             f'Git-проекты в {settings.project_root} не найдены.'
         )
+
     current = active_project_name(context)
-    lines = [f"{'👉 ' if x == current else ''}{x}" for x in items]
-    await update.effective_message.reply_text('Проекты:\n' + '\n'.join(lines))
+    buttons = []
+    for name in items[:40]:
+        mark = '✅ ' if name == current else ''
+        buttons.append([
+            InlineKeyboardButton(
+                f'{mark}{name}',
+                callback_data=f'project:{name}',
+            )
+        ])
+
+    await update.effective_message.reply_text(
+        f'Выберите проект. Текущий: {current or "не выбран"}',
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+
+
+async def _select_project(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    name: str,
+    edit: bool = False,
+) -> None:
+    project = resolve_project(settings.project_root, name)
+    branch = await current_branch(project)
+    context.user_data['project'] = name
+    context.user_data['session_name'] = 'default'
+    text = (
+        f'Активный проект: {name}\n'
+        f'Ветка: {branch or "detached HEAD"}\n'
+        'OpenCode session: default'
+    )
+    if edit and update.callback_query:
+        await update.callback_query.edit_message_text(text)
+    else:
+        await update.effective_message.reply_text(text)
 
 
 async def project_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not authorized(update):
         return await deny(update)
     if not context.args:
-        return await update.effective_message.reply_text('Использование: /project NAME')
-    name = context.args[0]
+        return await projects_cmd(update, context)
     try:
-        project = resolve_project(settings.project_root, name)
-        branch = await current_branch(project)
+        await _select_project(update, context, context.args[0])
     except (ProjectError, GitError) as exc:
+        await update.effective_message.reply_text(f'Ошибка: {exc}')
+
+
+async def sessions_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not authorized(update):
+        return await deny(update)
+    try:
+        project = active_project(context)
+    except ProjectError as exc:
+        return await update.effective_message.reply_text(str(exc))
+
+    found = sessions.list(update.effective_user.id, project.name)
+    active = active_session_name(context)
+    lines = [f'Активная: {active}', '']
+    if found:
+        for name, sid in sorted(found.items()):
+            mark = '👉 ' if name == active else ''
+            lines.append(f'{mark}{name}: {sid}')
+    else:
+        lines.append('Сохранённых sessionID пока нет. Выполните /chat, /plan или /exec.')
+    await send_long(update, '\n'.join(lines))
+
+
+async def newsession_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not authorized(update):
+        return await deny(update)
+    try:
+        project = active_project(context)
+        name = sessions.validate_name(' '.join(context.args))
+    except (ProjectError, ValueError) as exc:
         return await update.effective_message.reply_text(f'Ошибка: {exc}')
-    context.user_data['project'] = name
+
+    if sessions.get(update.effective_user.id, project.name, name):
+        return await update.effective_message.reply_text(
+            'Такая сессия уже существует. Используйте /session NAME.'
+        )
+
+    context.user_data['session_name'] = name
     await update.effective_message.reply_text(
-        f'Активный проект: {name}\nВетка: {branch or "detached HEAD"}'
+        f'Новая сессия {name!r} выбрана. Session ID будет создан при следующем запросе.'
     )
+
+
+async def session_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not authorized(update):
+        return await deny(update)
+    try:
+        project = active_project(context)
+        name = sessions.validate_name(' '.join(context.args))
+    except (ProjectError, ValueError) as exc:
+        return await update.effective_message.reply_text(f'Ошибка: {exc}')
+
+    sid = sessions.get(update.effective_user.id, project.name, name)
+    if not sid:
+        return await update.effective_message.reply_text(
+            'Сессия не найдена. Создайте её: /newsession NAME'
+        )
+    context.user_data['session_name'] = name
+    await update.effective_message.reply_text(f'Активная OpenCode-сессия: {name}\nID: {sid}')
 
 
 async def _agent(
@@ -121,9 +248,7 @@ async def _agent(
 
     prompt = prompt.strip()
     if not prompt:
-        return await update.effective_message.reply_text(
-            f'Добавьте текст задания после /{mode}.'
-        )
+        return await update.effective_message.reply_text(f'Добавьте текст после /{mode}.')
 
     try:
         project = active_project(context)
@@ -133,9 +258,7 @@ async def _agent(
     uid = update.effective_user.id
     lock = locks.setdefault(uid, asyncio.Lock())
     if lock.locked():
-        return await update.effective_message.reply_text(
-            'У вас уже выполняется задача. Дождитесь её завершения.'
-        )
+        return await update.effective_message.reply_text('У вас уже выполняется задача.')
 
     async with lock:
         try:
@@ -143,15 +266,28 @@ async def _agent(
             if mode == 'exec':
                 branch = await ensure_work_branch(project, settings.protected_branches)
 
+            session_name = active_session_name(context)
+            session_id = sessions.get(uid, project.name, session_name)
+
             await update.effective_message.reply_text(
-                f'Запускаю {mode.upper()}\nПроект: {project.name}\nВетка: {branch}'
+                f'Запускаю {mode.upper()}\n'
+                f'Проект: {project.name}\n'
+                f'Ветка: {branch}\n'
+                f'Сессия: {session_name}'
             )
-            await context.bot.send_chat_action(
-                update.effective_chat.id,
-                ChatAction.TYPING,
+            await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
+
+            result = await runner.run(
+                project,
+                mode,
+                prompt,
+                session_id=session_id,
+                session_title=f'tg:{project.name}:{session_name}',
             )
 
-            result = await runner.run(project, mode, prompt)
+            if result.session_id and result.session_id != session_id:
+                sessions.set(uid, project.name, session_name, result.session_id)
+
             prefix = '✅' if result.returncode == 0 else f'⚠️ rc={result.returncode}'
             await send_long(update, f'{prefix}\n\n{result.output}')
 
@@ -180,12 +316,31 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await _agent(update, context, 'chat', update.effective_message.text)
 
 
-async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def tests_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not authorized(update):
         return await deny(update)
     try:
         project = active_project(context)
-        await send_long(update, await status(project))
+        requested = context.args[0] if context.args else None
+        await update.effective_message.reply_text('Запускаю тесты...')
+        cmd, rc, output = await run_tests(
+            project,
+            requested=requested,
+            timeout=settings.test_timeout_seconds,
+        )
+        await send_long(
+            update,
+            f'Команда: {" ".join(cmd)}\nExit code: {rc}\n\n{output or "(нет вывода)"}',
+        )
+    except (ProjectError, TestRunError) as exc:
+        await update.effective_message.reply_text(f'Ошибка: {exc}')
+
+
+async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not authorized(update):
+        return await deny(update)
+    try:
+        await send_long(update, await status(active_project(context)))
     except (ProjectError, GitError) as exc:
         await update.effective_message.reply_text(f'Ошибка: {exc}')
 
@@ -194,8 +349,34 @@ async def diff_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not authorized(update):
         return await deny(update)
     try:
+        await send_long(update, await diff(active_project(context)))
+    except (ProjectError, GitError) as exc:
+        await update.effective_message.reply_text(f'Ошибка: {exc}')
+
+
+async def branch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not authorized(update):
+        return await deny(update)
+    try:
         project = active_project(context)
-        await send_long(update, await diff(project))
+        if context.args:
+            branch = await switch_branch(project, context.args[0])
+            return await update.effective_message.reply_text(f'Переключено на ветку: {branch}')
+
+        current = await current_branch(project)
+        branches = await list_branches(project)
+        context.user_data['branch_choices'] = branches[:30]
+        buttons = [
+            [InlineKeyboardButton(
+                ('✅ ' if b == current else '') + b,
+                callback_data=f'branch:{i}',
+            )]
+            for i, b in enumerate(branches[:30])
+        ]
+        await update.effective_message.reply_text(
+            f'Текущая ветка: {current}\nВыберите ветку:',
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
     except (ProjectError, GitError) as exc:
         await update.effective_message.reply_text(f'Ошибка: {exc}')
 
@@ -203,17 +384,11 @@ async def diff_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def commit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not authorized(update):
         return await deny(update)
-
     message = ' '.join(context.args).strip()
     if not message:
-        return await update.effective_message.reply_text(
-            'Использование: /commit MESSAGE'
-        )
-
+        return await update.effective_message.reply_text('Использование: /commit MESSAGE')
     if len(message) > 200 or '\n' in message or '\r' in message:
-        return await update.effective_message.reply_text(
-            'Commit message должен быть одной строкой до 200 символов.'
-        )
+        return await update.effective_message.reply_text('Commit message: одна строка до 200 символов.')
 
     try:
         project = active_project(context)
@@ -223,26 +398,17 @@ async def commit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return await update.effective_message.reply_text(f'Ошибка: {exc}')
 
     if branch in settings.protected_branches:
-        return await update.effective_message.reply_text(
-            'Commit в защищённую ветку запрещён. '
-            'Сначала выполните /exec — будет создана ai/* ветка.'
-        )
+        return await update.effective_message.reply_text('Commit в защищённую ветку запрещён.')
 
     context.user_data['pending'] = {
-        'action': 'commit',
-        'message': message,
-        'project': project.name,
+        'action': 'commit', 'message': message, 'project': project.name,
     }
-
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton('✅ Commit', callback_data='confirm:commit'),
         InlineKeyboardButton('❌ Отмена', callback_data='cancel'),
     ]])
-
     await update.effective_message.reply_text(
-        f'Подтвердите commit.\n'
-        f'Проект: {project.name}\n'
-        f'Ветка: {branch}\n'
+        f'Подтвердите commit.\nПроект: {project.name}\nВетка: {branch}\n'
         f'Message: {message}\n\n{summary}',
         reply_markup=keyboard,
     )
@@ -251,7 +417,6 @@ async def commit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 async def push_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not authorized(update):
         return await deny(update)
-
     try:
         project = active_project(context)
         branch = await current_branch(project)
@@ -259,47 +424,105 @@ async def push_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return await update.effective_message.reply_text(f'Ошибка: {exc}')
 
     if not branch or branch in settings.protected_branches:
-        return await update.effective_message.reply_text(
-            'Push из detached HEAD или защищённой ветки запрещён.'
-        )
+        return await update.effective_message.reply_text('Push из этой ветки запрещён.')
 
-    context.user_data['pending'] = {
-        'action': 'push',
-        'project': project.name,
-    }
-
+    context.user_data['pending'] = {'action': 'push', 'project': project.name}
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton('✅ Push', callback_data='confirm:push'),
         InlineKeyboardButton('❌ Отмена', callback_data='cancel'),
     ]])
-
     await update.effective_message.reply_text(
         f'Подтвердите: git push -u origin {branch}',
         reply_markup=keyboard,
     )
 
 
+async def pr_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not authorized(update):
+        return await deny(update)
+    try:
+        project = active_project(context)
+        branch = await current_branch(project)
+        if not branch or branch in settings.protected_branches:
+            raise GitError('PR из защищённой ветки или detached HEAD запрещён.')
+        title = ' '.join(context.args).strip() or None
+        url = await create_pr(project, title=title)
+        await update.effective_message.reply_text(f'✅ Pull Request:\n{url}')
+    except (ProjectError, GitError) as exc:
+        await update.effective_message.reply_text(
+            f'Ошибка PR: {exc}\nЕсли ветка ещё не опубликована, сначала выполните /push.'
+        )
+
+
+async def rollback_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not authorized(update):
+        return await deny(update)
+    try:
+        project = active_project(context)
+        summary = await status(project)
+    except (ProjectError, GitError) as exc:
+        return await update.effective_message.reply_text(f'Ошибка: {exc}')
+
+    context.user_data['pending'] = {'action': 'rollback', 'project': project.name}
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton('⚠️ Rollback tracked', callback_data='confirm:rollback'),
+        InlineKeyboardButton('❌ Отмена', callback_data='cancel'),
+    ]])
+    await update.effective_message.reply_text(
+        'Будут отменены staged/unstaged изменения TRACKED-файлов до HEAD.\n'
+        'Untracked-файлы не удаляются.\n\n' + summary,
+        reply_markup=keyboard,
+    )
+
+
+async def logs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not authorized(update):
+        return await deny(update)
+    try:
+        count = int(context.args[0]) if context.args else 80
+        count = min(max(count, 10), 300)
+        if not log_file.exists():
+            return await update.effective_message.reply_text('Лог пока пуст.')
+        lines = log_file.read_text(encoding='utf-8', errors='replace').splitlines()
+        await send_long(update, '\n'.join(lines[-count:]) or '(лог пуст)')
+    except ValueError:
+        await update.effective_message.reply_text('Использование: /logs [10..300]')
+
+
 async def cancel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not authorized(update):
         return await deny(update)
     context.user_data.pop('pending', None)
-    await update.effective_message.reply_text(
-        'Ожидающее подтверждение отменено.'
-    )
+    await update.effective_message.reply_text('Ожидающее подтверждение отменено.')
 
 
 async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-
     if not authorized(update):
         if query:
             await query.answer('Доступ запрещён.', show_alert=True)
         return
-
     if not query:
         return
-
     await query.answer()
+
+    if query.data.startswith('project:'):
+        try:
+            return await _select_project(
+                update, context, query.data.split(':', 1)[1], edit=True
+            )
+        except (ProjectError, GitError) as exc:
+            return await query.edit_message_text(f'Ошибка: {exc}')
+
+    if query.data.startswith('branch:'):
+        try:
+            idx = int(query.data.split(':', 1)[1])
+            choices = context.user_data.get('branch_choices', [])
+            branch = choices[idx]
+            switched = await switch_branch(active_project(context), branch)
+            return await query.edit_message_text(f'Переключено на ветку: {switched}')
+        except (ValueError, IndexError, ProjectError, GitError) as exc:
+            return await query.edit_message_text(f'Ошибка: {exc}')
 
     if query.data == 'cancel':
         context.user_data.pop('pending', None)
@@ -307,101 +530,69 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     pending = context.user_data.get('pending')
     if not isinstance(pending, dict):
-        return await query.edit_message_text(
-            'Нет операции, ожидающей подтверждения.'
-        )
+        return await query.edit_message_text('Нет операции, ожидающей подтверждения.')
 
     expected = f"confirm:{pending.get('action')}"
     if query.data != expected:
         return await query.edit_message_text('Подтверждение устарело.')
 
     try:
-        project = resolve_project(
-            settings.project_root,
-            str(pending['project']),
-        )
+        project = resolve_project(settings.project_root, str(pending['project']))
         branch = await current_branch(project)
 
-        if branch in settings.protected_branches:
+        if pending['action'] in {'commit', 'push'} and branch in settings.protected_branches:
             raise GitError('Операция в защищённой ветке запрещена.')
 
         if pending['action'] == 'commit':
-            result = await commit_all(
-                project,
-                str(pending['message']),
-            )
+            result = await commit_all(project, str(pending['message']))
             text = '✅ Commit создан.\n' + result
-
         elif pending['action'] == 'push':
             result = await push_current(project)
             text = '✅ Push выполнен.\n' + (result or f'origin/{branch}')
-
+        elif pending['action'] == 'rollback':
+            result = await rollback_tracked_changes(project)
+            text = '✅ Rollback выполнен.\n' + result
         else:
             raise GitError('Неизвестная операция.')
 
         context.user_data.pop('pending', None)
         await query.edit_message_text(text[:4000])
-
     except Exception as exc:
-        log.exception('Confirmed git operation failed')
+        log.exception('Confirmed operation failed')
         context.user_data.pop('pending', None)
         await query.edit_message_text(f'Ошибка: {exc}')
 
 
-async def error_handler(
-    update: object,
-    context: ContextTypes.DEFAULT_TYPE,
-) -> None:
-    log.exception(
-        'Unhandled Telegram error',
-        exc_info=context.error,
-    )
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    log.exception('Unhandled Telegram error', exc_info=context.error)
 
 
 def main() -> None:
-    app = (
-        Application.builder()
-        .token(settings.telegram_bot_token)
-        .build()
-    )
+    app = Application.builder().token(settings.telegram_bot_token).build()
 
-    app.add_handler(CommandHandler('start', start_cmd))
-    app.add_handler(CommandHandler('help', start_cmd))
-    app.add_handler(CommandHandler('projects', projects_cmd))
-    app.add_handler(CommandHandler('project', project_cmd))
-    app.add_handler(CommandHandler('chat', chat_cmd))
-    app.add_handler(CommandHandler('plan', plan_cmd))
-    app.add_handler(CommandHandler('exec', exec_cmd))
-    app.add_handler(CommandHandler('status', status_cmd))
-    app.add_handler(CommandHandler('diff', diff_cmd))
-    app.add_handler(CommandHandler('commit', commit_cmd))
-    app.add_handler(CommandHandler('push', push_cmd))
-    app.add_handler(CommandHandler('cancel', cancel_cmd))
+    for name, handler in [
+        ('start', start_cmd), ('help', start_cmd),
+        ('projects', projects_cmd), ('project', project_cmd),
+        ('sessions', sessions_cmd), ('newsession', newsession_cmd), ('session', session_cmd),
+        ('chat', chat_cmd), ('plan', plan_cmd), ('exec', exec_cmd),
+        ('tests', tests_cmd), ('status', status_cmd), ('diff', diff_cmd),
+        ('branch', branch_cmd), ('commit', commit_cmd), ('push', push_cmd),
+        ('pr', pr_cmd), ('rollback', rollback_cmd), ('logs', logs_cmd),
+        ('cancel', cancel_cmd),
+    ]:
+        app.add_handler(CommandHandler(name, handler))
 
     app.add_handler(
         CallbackQueryHandler(
             callback,
-            pattern=r'^(confirm:(commit|push)|cancel)$',
+            pattern=r'^(project:.+|branch:\d+|confirm:(commit|push|rollback)|cancel)$',
         )
     )
-
-    app.add_handler(
-        MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            text_message,
-        )
-    )
-
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message))
     app.add_error_handler(error_handler)
 
-    log.info(
-        'Starting bot; project_root=%s',
-        settings.project_root,
-    )
-
-    app.run_polling(
-        allowed_updates=Update.ALL_TYPES,
-    )
+    log.info('Starting bot; project_root=%s state_dir=%s', settings.project_root, settings.state_dir)
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == '__main__':
