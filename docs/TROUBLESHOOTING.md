@@ -176,3 +176,78 @@ source .venv/bin/activate
 pip install pytest
 pytest -q
 ```
+
+
+## Бот показывает один проект, а OpenCode читает другой
+
+Симптом:
+
+```text
+Запускаю PLAN
+Проект: alert-centr
+```
+
+но в выводе OpenCode появляются файлы другого репозитория, например
+`telegram-opencode-bot/bot.py`, `security.py` и т. п.
+
+Причина: OpenCode v2 по умолчанию может использовать общий background server
+для локальных клиентов. Для remote-bot это нежелательно, потому что Location
+общего server может относиться к ранее открывавшемуся проекту.
+
+Начиная с исправления `0b62c45`, бот запускает OpenCode так:
+
+```text
+opencode run --standalone --dir /absolute/path/to/project --auto ...
+```
+
+Дополнительно Python subprocess получает тот же `cwd` и `PWD`.
+
+Обновите проект:
+
+```bash
+cd ~/telegram-opencode-bot
+git pull
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+Проверьте поддержку параметров вашей версией OpenCode:
+
+```bash
+opencode run --help | grep -E -- '--standalone|--dir'
+```
+
+После обновления перезапустите сервис:
+
+```bash
+sudo systemctl restart telegram-opencode-bot@$USER.service
+journalctl -u telegram-opencode-bot@$USER.service -n 100 --no-pager
+```
+
+Проверьте вручную тот же проект:
+
+```bash
+cd ~/projects/alert-centr
+opencode run --standalone --dir "$PWD" "Покажи абсолютный путь активного проекта и перечисли 5 файлов верхнего уровня"
+```
+
+В Telegram:
+
+```text
+/project alert-centr
+/plan В начале ответа укажи абсолютный путь активного проекта, затем опиши его структуру. Ничего не меняй.
+```
+
+Если путь не `~/projects/alert-centr`, проверьте:
+
+```bash
+grep '^PROJECT_ROOT=' ~/telegram-opencode-bot/.env
+realpath ~/projects/alert-centr
+git -C ~/projects/alert-centr rev-parse --show-toplevel
+```
+
+## В Telegram видны [0m и другие управляющие последовательности
+
+Это ANSI/VT100-коды форматирования терминала из stdout OpenCode.
+Начиная с исправления `0b62c45`, `opencode_runner.py` удаляет их перед
+отправкой текста в Telegram.
