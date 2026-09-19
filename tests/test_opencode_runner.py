@@ -28,3 +28,19 @@ def test_parse_json_stream_extracts_nested_error():
     text, session_id = _parse_json_stream(raw)
     assert text == "OpenCode error: Model not found"
     assert session_id == "ses_123"
+
+
+def test_oauth_env_removes_runtime_config(monkeypatch):
+    from types import SimpleNamespace
+    from opencode_runner import OpenCodeRunner
+
+    runner = OpenCodeRunner(SimpleNamespace())
+    env = runner._oauth_env({
+        'OPENCODE_CONFIG_CONTENT': '{"permissions":[]}',
+        'PATH': '/usr/bin',
+    })
+
+    assert 'OPENCODE_CONFIG_CONTENT' not in env
+    assert env['HOME']
+    assert env['XDG_CONFIG_HOME'].endswith('/.config')
+    assert env['XDG_DATA_HOME'].endswith('/.local/share')
