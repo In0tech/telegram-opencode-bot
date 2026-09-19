@@ -194,6 +194,37 @@ class OpenCodeRunner:
             )
         return text
 
+    async def provider_status(self) -> str:
+        workspace = (self.settings.state_dir / 'chatgpt-workspace').resolve()
+        workspace.mkdir(parents=True, exist_ok=True)
+        env = os.environ.copy()
+        env['PWD'] = str(workspace)
+
+        auth_rc, auth_raw = await self._spawn(
+            workspace,
+            [self.settings.opencode_bin, 'auth', 'list'],
+            env,
+            timeout=30,
+        )
+        models_rc, models_raw = await self._spawn(
+            workspace,
+            [self.settings.opencode_bin, 'models', 'openai'],
+            env,
+            timeout=30,
+        )
+
+        auth = _clean_output(auth_raw) or f'auth list rc={auth_rc}'
+        models = _clean_output(models_raw) or f'openai models rc={models_rc}'
+
+        return (
+            'OpenCode auth:\n'
+            + auth
+            + '\n\nOpenAI models:\n'
+            + models
+            + '\n\nOPENCODE_MODEL='
+            + (self.settings.opencode_model or '<default>')
+        )
+
     async def run_general(
         self,
         prompt: str,
