@@ -784,7 +784,8 @@ def main() -> None:
         ('tests', tests_cmd), ('status', status_cmd), ('diff', diff_cmd),
         ('branch', branch_cmd), ('commit', commit_cmd), ('push', push_cmd),
         ('pr', pr_cmd), ('rollback', rollback_cmd), ('logs', logs_cmd),
-        ('cancel', cancel_cmd),
+        ('presentation', presentation_cmd), ('image', image_cmd), ('video', video_cmd),
+        ('email', email_cmd), ('tarot', tarot_cmd), ('cancel', cancel_cmd),
     ]:
         app.add_handler(CommandHandler(name, handler))
 
