@@ -1,12 +1,41 @@
 from __future__ import annotations
 
 import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+def _resolve_executable(value: str) -> str:
+    value = value.strip() or 'opencode'
+    expanded = Path(value).expanduser()
+
+    if expanded.is_absolute() or '/' in value:
+        return str(expanded.resolve())
+
+    found = shutil.which(value)
+    if found:
+        return found
+
+    home = Path.home()
+    candidates = [
+        home / '.opencode' / 'bin' / value,
+        home / '.local' / 'bin' / value,
+        home / '.local' / 'share' / 'pnpm' / value,
+        home / '.bun' / 'bin' / value,
+        home / '.npm-global' / 'bin' / value,
+        Path('/usr/local/bin') / value,
+        Path('/usr/bin') / value,
+    ]
+    for candidate in candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+
+    return value
 
 
 def _csv_ints(value: str) -> frozenset[int]:
@@ -75,7 +104,7 @@ class Settings:
             allowed_user_ids=allowed,
             project_root=root,
             state_dir=state_dir,
-            opencode_bin=os.getenv('OPENCODE_BIN', 'opencode').strip() or 'opencode',
+            opencode_bin=_resolve_executable(os.getenv('OPENCODE_BIN', 'opencode')),
             opencode_model=os.getenv('OPENCODE_MODEL', '').strip() or None,
             task_timeout_seconds=int(os.getenv('TASK_TIMEOUT_SECONDS', '1800')),
             test_timeout_seconds=int(os.getenv('TEST_TIMEOUT_SECONDS', '900')),
