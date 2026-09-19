@@ -327,3 +327,72 @@ journalctl -u telegram-opencode-bot@$USER.service -n 100 --no-pager
 ```
 
 Если OpenCode всё ещё не находится, рекомендуется указать абсолютный путь через `OPENCODE_BIN`.
+
+
+## OpenCode выбирает jev-1.13-free и зависает с Error: Transport
+
+Симптом:
+
+```text
+> build · jev-1.13-free
+> build · jev-1.13-free
+...
+Error: Transport
+```
+
+Это означает, что новый `opencode run` использует последнюю/fallback модель вместо OpenAI ChatGPT OAuth.
+
+OpenCode выбирает модель в порядке: `--model`, затем `model` из config, затем последняя использованная модель, затем fallback.
+
+После обновления бот принудительно использует провайдера из:
+
+```env
+OPENCODE_PROVIDER=openai
+OPENCODE_MODEL=
+```
+
+При пустом `OPENCODE_MODEL` бот выполняет:
+
+```bash
+opencode models openai
+```
+
+и передаёт найденную модель явно через `--model openai/...`.
+
+Для исправления обычного CLI выполните:
+
+```bash
+cd ~/telegram-opencode-bot
+chmod +x scripts/configure_chatgpt_openai.sh
+./scripts/configure_chatgpt_openai.sh
+```
+
+Скрипт записывает выбранную OpenAI-модель как default в:
+
+```text
+~/.config/opencode/opencode.json
+```
+
+и ограничивает автоматический выбор провайдером OpenAI.
+
+Если скрипт не находит ни одной `openai/...` модели, сначала:
+
+```bash
+opencode
+```
+
+затем внутри:
+
+```text
+/connect
+OpenAI
+ChatGPT Plus/Pro
+```
+
+После OAuth:
+
+```text
+/models
+```
+
+и повторите setup script.
