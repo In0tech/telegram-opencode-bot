@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from logging.handlers import RotatingFileHandler
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -16,6 +17,7 @@ from telegram.ext import (
 )
 
 from config import Settings
+from creative_tools import CreativeError, CreativeService
 from git_ops import (
     GitError,
     commit_all,
@@ -33,6 +35,7 @@ from opencode_runner import OpenCodeRunner
 from projects import ProjectError, list_projects, resolve_project
 from session_store import SessionStore
 from test_runner import TestRunError, run_tests
+from tarot import draw_cards
 
 settings = Settings.from_env()
 
@@ -54,8 +57,10 @@ logging.basicConfig(
 
 log = logging.getLogger('telegram-opencode-bot')
 runner = OpenCodeRunner(settings)
+creative = CreativeService(settings)
 sessions = SessionStore(settings.state_dir / 'sessions.json')
 locks: dict[int, asyncio.Lock] = {}
+creative_locks: dict[int, asyncio.Lock] = {}
 
 
 def authorized(update: Update) -> bool:
@@ -116,6 +121,12 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         '/pr [TITLE] — создать GitHub Pull Request\n'
         '/rollback — откатить tracked-изменения с подтверждением\n'
         '/logs [N] — последние строки лога бота\n'
+        '\nТворческие команды:\n'
+        '/presentation [N] | ТЕМА — редактируемый PPTX\n'
+        '/image ОПИСАНИЕ — сгенерировать изображение\n'
+        '/video ОПИСАНИЕ — сгенерировать видео\n'
+        '/email ЗАДАНИЕ — написать письмо\n'
+        '/tarot [N] | ВОПРОС — расклад Таро\n'
         '/cancel — отменить ожидающее подтверждение'
     )
 
@@ -487,6 +498,283 @@ async def logs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await send_long(update, '\n'.join(lines[-count:]) or '(лог пуст)')
     except ValueError:
         await update.effective_message.reply_text('Использование: /logs [10..300]')
+
+
+def _command_payload(update: Update) -> str:
+    text = update.effective_message.text if update.effective_message else ''
+    parts = text.split(maxsplit=1)
+    return parts[1].strip() if len(parts) > 1 else ''
+
+
+def _parse_count_payload(payload: str, default: int, minimum: int, maximum: int) -> tuple[int, str]:
+    match = re.match(r'^([0-9]{1,2})\\s*\\|\\s*(.+)    if not authorized(update):
+        return await deny(update)
+    context.user_data.pop('pending', None)
+    await update.effective_message.reply_text('Ожидающее подтверждение отменено.')
+
+
+async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not authorized(update):
+        if query:
+            await query.answer('Доступ запрещён.', show_alert=True)
+        return
+    if not query:
+        return
+    await query.answer()
+
+    if query.data.startswith('project:'):
+        try:
+            return await _select_project(
+                update, context, query.data.split(':', 1)[1], edit=True
+            )
+        except (ProjectError, GitError) as exc:
+            return await query.edit_message_text(f'Ошибка: {exc}')
+
+    if query.data.startswith('branch:'):
+        try:
+            idx = int(query.data.split(':', 1)[1])
+            choices = context.user_data.get('branch_choices', [])
+            branch = choices[idx]
+            switched = await switch_branch(active_project(context), branch)
+            return await query.edit_message_text(f'Переключено на ветку: {switched}')
+        except (ValueError, IndexError, ProjectError, GitError) as exc:
+            return await query.edit_message_text(f'Ошибка: {exc}')
+
+    if query.data == 'cancel':
+        context.user_data.pop('pending', None)
+        return await query.edit_message_text('Операция отменена.')
+
+    pending = context.user_data.get('pending')
+    if not isinstance(pending, dict):
+        return await query.edit_message_text('Нет операции, ожидающей подтверждения.')
+
+    expected = f"confirm:{pending.get('action')}"
+    if query.data != expected:
+        return await query.edit_message_text('Подтверждение устарело.')
+
+    try:
+        project = resolve_project(settings.project_root, str(pending['project']))
+        branch = await current_branch(project)
+
+        if pending['action'] in {'commit', 'push'} and branch in settings.protected_branches:
+            raise GitError('Операция в защищённой ветке запрещена.')
+
+        if pending['action'] == 'commit':
+            result = await commit_all(project, str(pending['message']))
+            text = '✅ Commit создан.\n' + result
+        elif pending['action'] == 'push':
+            result = await push_current(project)
+            text = '✅ Push выполнен.\n' + (result or f'origin/{branch}')
+        elif pending['action'] == 'rollback':
+            result = await rollback_tracked_changes(project)
+            text = '✅ Rollback выполнен.\n' + result
+        else:
+            raise GitError('Неизвестная операция.')
+
+        context.user_data.pop('pending', None)
+        await query.edit_message_text(text[:4000])
+    except Exception as exc:
+        log.exception('Confirmed operation failed')
+        context.user_data.pop('pending', None)
+        await query.edit_message_text(f'Ошибка: {exc}')
+
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    log.exception('Unhandled Telegram error', exc_info=context.error)
+
+
+def main() -> None:
+    app = Application.builder().token(settings.telegram_bot_token).build()
+
+    for name, handler in [
+        ('start', start_cmd), ('help', start_cmd),
+        ('projects', projects_cmd), ('project', project_cmd),
+        ('sessions', sessions_cmd), ('newsession', newsession_cmd), ('session', session_cmd),
+        ('chat', chat_cmd), ('plan', plan_cmd), ('exec', exec_cmd),
+        ('tests', tests_cmd), ('status', status_cmd), ('diff', diff_cmd),
+        ('branch', branch_cmd), ('commit', commit_cmd), ('push', push_cmd),
+        ('pr', pr_cmd), ('rollback', rollback_cmd), ('logs', logs_cmd),
+        ('presentation', presentation_cmd), ('image', image_cmd), ('video', video_cmd),
+        ('email', email_cmd), ('tarot', tarot_cmd), ('cancel', cancel_cmd),
+    ]:
+        app.add_handler(CommandHandler(name, handler))
+
+    app.add_handler(
+        CallbackQueryHandler(
+            callback,
+            pattern=r'^(project:.+|branch:\d+|confirm:(commit|push|rollback)|cancel)$',
+        )
+    )
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message))
+    app.add_error_handler(error_handler)
+
+    log.info('Starting bot; project_root=%s state_dir=%s', settings.project_root, settings.state_dir)
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+
+if __name__ == '__main__':
+    main()
+, payload, flags=re.S)
+    if not match:
+        return default, payload.strip()
+    count = min(max(int(match.group(1)), minimum), maximum)
+    return count, match.group(2).strip()
+
+
+async def _creative_guard(update: Update) -> asyncio.Lock | None:
+    uid = update.effective_user.id
+    lock = creative_locks.setdefault(uid, asyncio.Lock())
+    if lock.locked():
+        await update.effective_message.reply_text(
+            'У вас уже выполняется творческая генерация. Дождитесь её завершения.'
+        )
+        return None
+    return lock
+
+
+async def presentation_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not authorized(update):
+        return await deny(update)
+    slides, brief = _parse_count_payload(_command_payload(update), 8, 3, 20)
+    if not brief:
+        return await update.effective_message.reply_text(
+            'Использование: /presentation [N] | ТЕМА\\n'
+            'Пример: /presentation 10 | Инвесторская презентация продукта'
+        )
+    lock = await _creative_guard(update)
+    if not lock:
+        return
+    async with lock:
+        try:
+            await update.effective_message.reply_text(
+                f'Создаю редактируемую презентацию на {slides} слайдов...'
+            )
+            path = await creative.create_presentation(brief, slides=slides)
+            with path.open('rb') as fh:
+                await update.effective_message.reply_document(
+                    document=fh,
+                    filename=path.name,
+                    caption='✅ Презентация готова (.pptx)',
+                )
+        except CreativeError as exc:
+            await update.effective_message.reply_text(f'Ошибка презентации: {exc}')
+        except Exception as exc:
+            log.exception('Presentation generation failed')
+            await update.effective_message.reply_text(f'Ошибка презентации: {exc}')
+
+
+async def image_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not authorized(update):
+        return await deny(update)
+    prompt = _command_payload(update)
+    if not prompt:
+        return await update.effective_message.reply_text(
+            'Использование: /image ОПИСАНИЕ'
+        )
+    lock = await _creative_guard(update)
+    if not lock:
+        return
+    async with lock:
+        try:
+            await update.effective_message.reply_text('Генерирую изображение...')
+            path = await creative.create_image(prompt)
+            with path.open('rb') as fh:
+                await update.effective_message.reply_document(
+                    document=fh,
+                    filename=path.name,
+                    caption='✅ Изображение готово',
+                )
+        except CreativeError as exc:
+            await update.effective_message.reply_text(f'Ошибка изображения: {exc}')
+        except Exception as exc:
+            log.exception('Image generation failed')
+            await update.effective_message.reply_text(f'Ошибка изображения: {exc}')
+
+
+async def video_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not authorized(update):
+        return await deny(update)
+    prompt = _command_payload(update)
+    if not prompt:
+        return await update.effective_message.reply_text(
+            'Использование: /video ОПИСАНИЕ'
+        )
+    lock = await _creative_guard(update)
+    if not lock:
+        return
+    async with lock:
+        try:
+            await update.effective_message.reply_text(
+                'Запускаю генерацию видео. Это может занять несколько минут. '
+                'Текущий OpenAI Sora API объявлен устаревшим и может стать недоступен после 24.09.2026.'
+            )
+            path = await creative.create_video(prompt)
+            with path.open('rb') as fh:
+                await update.effective_message.reply_video(
+                    video=fh,
+                    filename=path.name,
+                    caption='✅ Видео готово',
+                    supports_streaming=True,
+                )
+        except CreativeError as exc:
+            await update.effective_message.reply_text(f'Ошибка видео: {exc}')
+        except Exception as exc:
+            log.exception('Video generation failed')
+            await update.effective_message.reply_text(f'Ошибка видео: {exc}')
+
+
+async def email_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not authorized(update):
+        return await deny(update)
+    brief = _command_payload(update)
+    if not brief:
+        return await update.effective_message.reply_text(
+            'Использование: /email ЗАДАНИЕ\\n'
+            'Пример: /email Напиши вежливое письмо инвестору с благодарностью за встречу'
+        )
+    lock = await _creative_guard(update)
+    if not lock:
+        return
+    async with lock:
+        try:
+            await update.effective_message.reply_text('Готовлю письмо...')
+            text = await creative.draft_email(brief)
+            await send_long(update, text)
+        except CreativeError as exc:
+            await update.effective_message.reply_text(f'Ошибка письма: {exc}')
+        except Exception as exc:
+            log.exception('Email drafting failed')
+            await update.effective_message.reply_text(f'Ошибка письма: {exc}')
+
+
+async def tarot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not authorized(update):
+        return await deny(update)
+    count, question = _parse_count_payload(_command_payload(update), 3, 1, 10)
+    cards = draw_cards(count)
+    spread = '\\n'.join(
+        f'{idx + 1}. {card.name} — {card.orientation}'
+        for idx, card in enumerate(cards)
+    )
+    lock = await _creative_guard(update)
+    if not lock:
+        return
+    async with lock:
+        try:
+            await update.effective_message.reply_text(
+                f'Карты расклада:\\n{spread}\\n\\nИнтерпретирую...'
+            )
+            text = await creative.interpret_tarot(question, cards)
+            await send_long(update, text)
+        except CreativeError as exc:
+            await update.effective_message.reply_text(
+                f'Карты расклада:\\n{spread}\\n\\n'
+                f'Для AI-интерпретации требуется настройка: {exc}'
+            )
+        except Exception as exc:
+            log.exception('Tarot interpretation failed')
+            await update.effective_message.reply_text(f'Ошибка Таро: {exc}')
 
 
 async def cancel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
