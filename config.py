@@ -55,6 +55,7 @@ class Settings:
     state_dir: Path
     opencode_bin: str
     opencode_model: str | None
+    opencode_provider: str
     task_timeout_seconds: int
     test_timeout_seconds: int
     max_output_chars: int
@@ -94,6 +95,7 @@ class Settings:
             state_dir=state_dir,
             opencode_bin=_resolve_executable(os.getenv('OPENCODE_BIN', 'opencode')),
             opencode_model=os.getenv('OPENCODE_MODEL', '').strip() or None,
+            opencode_provider=os.getenv('OPENCODE_PROVIDER', 'openai').strip() or 'openai',
             task_timeout_seconds=int(os.getenv('TASK_TIMEOUT_SECONDS', '1800')),
             test_timeout_seconds=int(os.getenv('TEST_TIMEOUT_SECONDS', '900')),
             max_output_chars=int(os.getenv('MAX_OUTPUT_CHARS', '16000')),
