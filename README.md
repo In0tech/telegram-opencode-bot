@@ -46,7 +46,7 @@ GitHub
 - один OpenCode task одновременно на пользователя;
 - timeout выполнения;
 - ограничение размера Telegram-ответов;
-- systemd unit для WSL2/Linux;\n- `/presentation` — редактируемые PowerPoint;\n- `/image` — генерация изображений;\n- `/video` — генерация видео через текущий OpenAI Video API;\n- `/email` — написание готовых писем;\n- `/tarot` — расклады Таро с интерпретацией.
+- systemd unit для WSL2/Linux;\n- `/presentation` — редактируемые PowerPoint;\n- `/image` — подготовка промпта для ChatGPT Image без API;\n- `/video` — подготовка промпта для ChatGPT/Sora без API;\n- `/email` — написание готовых писем;\n- `/tarot` — расклады Таро с интерпретацией.
 
 ## Быстрый старт
 
@@ -197,4 +197,4 @@ pytest -q
 /tarot 3 | Что важно учитывать завтра?
 ```
 
-Для этих функций нужен `OPENAI_API_KEY`. Изображения создаются через GPT Image API, презентации возвращаются как редактируемые `.pptx`. Текущий OpenAI Sora API для `/video` помечен deprecated и запланирован к отключению 24.09.2026, поэтому video backend потребуется заменить после прекращения работы этого API.
+Творческие текстовые функции и содержимое PPTX используют OpenCode. Рекомендуемый режим — OpenAI → ChatGPT Plus/Pro OAuth в OpenCode, без `OPENAI_API_KEY` и без Platform API credits. `/image` и `/video` без API возвращают готовые промпты, потому что OpenCode документирует text output, а не бинарную генерацию изображений/видео.
