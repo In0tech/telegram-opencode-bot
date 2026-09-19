@@ -40,7 +40,7 @@ sudo apt install -y \
   python3 \
   python3-venv \
   python3-pip \
-  jq
+  jq \\\n  gh
 ```
 
 Проверка:
@@ -429,3 +429,40 @@ pytest -q
 Если Ubuntu/WSL не запущен, Telegram-бот может быть недоступен. WSL — не полноценный отдельный 24/7 сервер.
 
 Если вам нужен постоянный доступ независимо от рабочего ПК, перенесите проект на постоянно включённый Debian/Ubuntu сервер.
+
+
+## GitHub CLI для /pr
+
+Проверьте:
+
+```bash
+gh --version
+```
+
+Авторизуйте GitHub CLI:
+
+```bash
+gh auth login
+gh auth status
+```
+
+Команда `/pr` использует эту авторизацию. Если рабочие репозитории приватные, убедитесь, что выбранный аккаунт имеет к ним доступ.
+
+## Persistent state
+
+По умолчанию состояние хранится здесь:
+
+```text
+~/.local/state/telegram-opencode-bot/
+├── sessions.json
+├── bot.log
+├── bot.log.1
+└── ...
+```
+
+Путь можно изменить:
+
+```env
+STATE_DIR=/home/YOUR_USER/.local/state/telegram-opencode-bot
+TEST_TIMEOUT_SECONDS=900
+```
