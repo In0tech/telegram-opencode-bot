@@ -46,7 +46,7 @@ GitHub
 - один OpenCode task одновременно на пользователя;
 - timeout выполнения;
 - ограничение размера Telegram-ответов;
-- systemd unit для WSL2/Linux.
+- systemd unit для WSL2/Linux;\n- `/presentation` — редактируемые PowerPoint;\n- `/image` — генерация изображений;\n- `/video` — генерация видео через текущий OpenAI Video API;\n- `/email` — написание готовых писем;\n- `/tarot` — расклады Таро с интерпретацией.
 
 ## Быстрый старт
 
@@ -152,7 +152,7 @@ prod
 - [Установка Windows + WSL2 + Ubuntu + OpenCode + Bot](docs/INSTALL_WSL2.md)
 - [Использование Telegram-команд](docs/USAGE.md)
 - [Модель безопасности](docs/SECURITY.md)
-- [Диагностика и типовые ошибки](docs/TROUBLESHOOTING.md)
+- [Диагностика и типовые ошибки](docs/TROUBLESHOOTING.md)\n- [Презентации, изображения, видео, письма и Таро](docs/CREATIVE_FEATURES.md)
 
 ## Тесты
 
@@ -186,3 +186,15 @@ pytest -q
 ```
 
 `/projects` и `/branch` поддерживают inline-кнопки. `/pr` требует установленный и авторизованный GitHub CLI (`gh auth login`). Именованные OpenCode-сессии сохраняются в `STATE_DIR/sessions.json` и продолжаются через `opencode run --session <id>`. OpenCode документирует `--session` и JSON output для automation.\n
+
+## Творческие команды
+
+```text
+/presentation 10 | Инвесторская презентация продукта
+/image Фотореалистичный современный SOC
+/video Кинематографичный пролёт через дата-центр
+/email Напиши письмо инвестору после встречи
+/tarot 3 | Что важно учитывать завтра?
+```
+
+Для этих функций нужен `OPENAI_API_KEY`. Изображения создаются через GPT Image API, презентации возвращаются как редактируемые `.pptx`. Текущий OpenAI Sora API для `/video` помечен deprecated и запланирован к отключению 24.09.2026, поэтому video backend потребуется заменить после прекращения работы этого API.
