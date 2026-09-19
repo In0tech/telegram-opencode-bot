@@ -8,6 +8,7 @@ Type=simple
 User=%i
 WorkingDirectory=/home/%i/telegram-opencode-bot
 EnvironmentFile=/home/%i/telegram-opencode-bot/.env
+Environment="PATH=/home/%i/.opencode/bin:/home/%i/.local/bin:/home/%i/.local/share/pnpm:/home/%i/.bun/bin:/home/%i/.npm-global/bin:/usr/local/bin:/usr/bin:/bin"
 ExecStart=/home/%i/telegram-opencode-bot/.venv/bin/python /home/%i/telegram-opencode-bot/bot.py
 Restart=on-failure
 RestartSec=5
