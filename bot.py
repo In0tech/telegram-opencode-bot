@@ -506,116 +506,13 @@ def _command_payload(update: Update) -> str:
     return parts[1].strip() if len(parts) > 1 else ''
 
 
-def _parse_count_payload(payload: str, default: int, minimum: int, maximum: int) -> tuple[int, str]:
-    match = re.match(r'^([0-9]{1,2})\\s*\\|\\s*(.+)    if not authorized(update):
-        return await deny(update)
-    context.user_data.pop('pending', None)
-    await update.effective_message.reply_text('Ожидающее подтверждение отменено.')
-
-
-async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    if not authorized(update):
-        if query:
-            await query.answer('Доступ запрещён.', show_alert=True)
-        return
-    if not query:
-        return
-    await query.answer()
-
-    if query.data.startswith('project:'):
-        try:
-            return await _select_project(
-                update, context, query.data.split(':', 1)[1], edit=True
-            )
-        except (ProjectError, GitError) as exc:
-            return await query.edit_message_text(f'Ошибка: {exc}')
-
-    if query.data.startswith('branch:'):
-        try:
-            idx = int(query.data.split(':', 1)[1])
-            choices = context.user_data.get('branch_choices', [])
-            branch = choices[idx]
-            switched = await switch_branch(active_project(context), branch)
-            return await query.edit_message_text(f'Переключено на ветку: {switched}')
-        except (ValueError, IndexError, ProjectError, GitError) as exc:
-            return await query.edit_message_text(f'Ошибка: {exc}')
-
-    if query.data == 'cancel':
-        context.user_data.pop('pending', None)
-        return await query.edit_message_text('Операция отменена.')
-
-    pending = context.user_data.get('pending')
-    if not isinstance(pending, dict):
-        return await query.edit_message_text('Нет операции, ожидающей подтверждения.')
-
-    expected = f"confirm:{pending.get('action')}"
-    if query.data != expected:
-        return await query.edit_message_text('Подтверждение устарело.')
-
-    try:
-        project = resolve_project(settings.project_root, str(pending['project']))
-        branch = await current_branch(project)
-
-        if pending['action'] in {'commit', 'push'} and branch in settings.protected_branches:
-            raise GitError('Операция в защищённой ветке запрещена.')
-
-        if pending['action'] == 'commit':
-            result = await commit_all(project, str(pending['message']))
-            text = '✅ Commit создан.\n' + result
-        elif pending['action'] == 'push':
-            result = await push_current(project)
-            text = '✅ Push выполнен.\n' + (result or f'origin/{branch}')
-        elif pending['action'] == 'rollback':
-            result = await rollback_tracked_changes(project)
-            text = '✅ Rollback выполнен.\n' + result
-        else:
-            raise GitError('Неизвестная операция.')
-
-        context.user_data.pop('pending', None)
-        await query.edit_message_text(text[:4000])
-    except Exception as exc:
-        log.exception('Confirmed operation failed')
-        context.user_data.pop('pending', None)
-        await query.edit_message_text(f'Ошибка: {exc}')
-
-
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    log.exception('Unhandled Telegram error', exc_info=context.error)
-
-
-def main() -> None:
-    app = Application.builder().token(settings.telegram_bot_token).build()
-
-    for name, handler in [
-        ('start', start_cmd), ('help', start_cmd),
-        ('projects', projects_cmd), ('project', project_cmd),
-        ('sessions', sessions_cmd), ('newsession', newsession_cmd), ('session', session_cmd),
-        ('chat', chat_cmd), ('plan', plan_cmd), ('exec', exec_cmd),
-        ('tests', tests_cmd), ('status', status_cmd), ('diff', diff_cmd),
-        ('branch', branch_cmd), ('commit', commit_cmd), ('push', push_cmd),
-        ('pr', pr_cmd), ('rollback', rollback_cmd), ('logs', logs_cmd),
-        ('presentation', presentation_cmd), ('image', image_cmd), ('video', video_cmd),
-        ('email', email_cmd), ('tarot', tarot_cmd), ('cancel', cancel_cmd),
-    ]:
-        app.add_handler(CommandHandler(name, handler))
-
-    app.add_handler(
-        CallbackQueryHandler(
-            callback,
-            pattern=r'^(project:.+|branch:\d+|confirm:(commit|push|rollback)|cancel)$',
-        )
-    )
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message))
-    app.add_error_handler(error_handler)
-
-    log.info('Starting bot; project_root=%s state_dir=%s', settings.project_root, settings.state_dir)
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
-
-
-if __name__ == '__main__':
-    main()
-, payload, flags=re.S)
+def _parse_count_payload(
+    payload: str,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> tuple[int, str]:
+    match = re.match(r'^([0-9]{1,2})\s*\|\s*(.+)$', payload, flags=re.S)
     if not match:
         return default, payload.strip()
     count = min(max(int(match.group(1)), minimum), maximum)
@@ -636,15 +533,23 @@ async def _creative_guard(update: Update) -> asyncio.Lock | None:
 async def presentation_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not authorized(update):
         return await deny(update)
-    slides, brief = _parse_count_payload(_command_payload(update), 8, 3, 20)
+
+    slides, brief = _parse_count_payload(
+        _command_payload(update),
+        default=8,
+        minimum=3,
+        maximum=20,
+    )
     if not brief:
         return await update.effective_message.reply_text(
-            'Использование: /presentation [N] | ТЕМА\\n'
+            'Использование: /presentation [N] | ТЕМА\n'
             'Пример: /presentation 10 | Инвесторская презентация продукта'
         )
+
     lock = await _creative_guard(update)
     if not lock:
         return
+
     async with lock:
         try:
             await update.effective_message.reply_text(
@@ -667,14 +572,17 @@ async def presentation_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def image_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not authorized(update):
         return await deny(update)
+
     prompt = _command_payload(update)
     if not prompt:
         return await update.effective_message.reply_text(
             'Использование: /image ОПИСАНИЕ'
         )
+
     lock = await _creative_guard(update)
     if not lock:
         return
+
     async with lock:
         try:
             await update.effective_message.reply_text('Генерирую изображение...')
@@ -695,19 +603,22 @@ async def image_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def video_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not authorized(update):
         return await deny(update)
+
     prompt = _command_payload(update)
     if not prompt:
         return await update.effective_message.reply_text(
             'Использование: /video ОПИСАНИЕ'
         )
+
     lock = await _creative_guard(update)
     if not lock:
         return
+
     async with lock:
         try:
             await update.effective_message.reply_text(
                 'Запускаю генерацию видео. Это может занять несколько минут. '
-                'Текущий OpenAI Sora API объявлен устаревшим и может стать недоступен после 24.09.2026.'
+                'OpenAI Sora API объявлен устаревшим и запланирован к отключению 24.09.2026.'
             )
             path = await creative.create_video(prompt)
             with path.open('rb') as fh:
@@ -727,15 +638,18 @@ async def video_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def email_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not authorized(update):
         return await deny(update)
+
     brief = _command_payload(update)
     if not brief:
         return await update.effective_message.reply_text(
-            'Использование: /email ЗАДАНИЕ\\n'
+            'Использование: /email ЗАДАНИЕ\n'
             'Пример: /email Напиши вежливое письмо инвестору с благодарностью за встречу'
         )
+
     lock = await _creative_guard(update)
     if not lock:
         return
+
     async with lock:
         try:
             await update.effective_message.reply_text('Готовлю письмо...')
@@ -751,25 +665,33 @@ async def email_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def tarot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not authorized(update):
         return await deny(update)
-    count, question = _parse_count_payload(_command_payload(update), 3, 1, 10)
+
+    count, question = _parse_count_payload(
+        _command_payload(update),
+        default=3,
+        minimum=1,
+        maximum=10,
+    )
     cards = draw_cards(count)
-    spread = '\\n'.join(
+    spread = '\n'.join(
         f'{idx + 1}. {card.name} — {card.orientation}'
         for idx, card in enumerate(cards)
     )
+
     lock = await _creative_guard(update)
     if not lock:
         return
+
     async with lock:
         try:
             await update.effective_message.reply_text(
-                f'Карты расклада:\\n{spread}\\n\\nИнтерпретирую...'
+                f'Карты расклада:\n{spread}\n\nИнтерпретирую...'
             )
             text = await creative.interpret_tarot(question, cards)
             await send_long(update, text)
         except CreativeError as exc:
             await update.effective_message.reply_text(
-                f'Карты расклада:\\n{spread}\\n\\n'
+                f'Карты расклада:\n{spread}\n\n'
                 f'Для AI-интерпретации требуется настройка: {exc}'
             )
         except Exception as exc:
