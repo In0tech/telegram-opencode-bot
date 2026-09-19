@@ -260,3 +260,70 @@ git -C ~/projects/alert-centr rev-parse --show-toplevel
 Это ANSI/VT100-коды форматирования терминала из stdout OpenCode.
 Начиная с исправления `0b62c45`, `opencode_runner.py` удаляет их перед
 отправкой текста в Telegram.
+
+
+## [Errno 2] No such file or directory: 'opencode'
+
+Симптом в Telegram:
+
+```text
+Ошибка выполнения: [Errno 2] No such file or directory: 'opencode'
+```
+
+Причина: бот запущен через systemd, а PATH systemd отличается от PATH интерактивного shell. OpenCode, установленный curl/npm/pnpm/bun, часто лежит в пользовательском каталоге.
+
+Начиная с исправления `e8b58e3`, бот автоматически ищет OpenCode в:
+
+```text
+~/.opencode/bin/opencode
+~/.local/bin/opencode
+~/.local/share/pnpm/opencode
+~/.bun/bin/opencode
+~/.npm-global/bin/opencode
+/usr/local/bin/opencode
+/usr/bin/opencode
+```
+
+Также обновлён systemd unit.
+
+Сначала узнайте фактический путь:
+
+```bash
+which opencode
+command -v opencode
+readlink -f "$(command -v opencode)"
+opencode --version
+```
+
+Если путь нестандартный, задайте его явно в `.env`:
+
+```env
+OPENCODE_BIN=/полный/путь/к/opencode
+```
+
+После обновления проекта ОБЯЗАТЕЛЬНО переустановите unit:
+
+```bash
+cd ~/telegram-opencode-bot
+git pull
+
+sudo cp systemd/telegram-opencode-bot.service \
+  /etc/systemd/system/telegram-opencode-bot@.service
+
+sudo systemctl daemon-reload
+sudo systemctl restart telegram-opencode-bot@$USER.service
+```
+
+Проверьте окружение systemd:
+
+```bash
+systemctl show telegram-opencode-bot@$USER.service -p Environment
+```
+
+Проверьте лог:
+
+```bash
+journalctl -u telegram-opencode-bot@$USER.service -n 100 --no-pager
+```
+
+Если OpenCode всё ещё не находится, рекомендуется указать абсолютный путь через `OPENCODE_BIN`.
