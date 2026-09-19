@@ -21,27 +21,35 @@ class CreativeError(RuntimeError):
 
 
 def _safe_filename(value: str, fallback: str) -> str:
-    value = re.sub(r'[^\\w.-]+', '_', value, flags=re.UNICODE).strip('._')
+    value = re.sub(r'[^\w.-]+', '_', value, flags=re.UNICODE).strip('._')
     return value[:80] or fallback
 
 
 def _extract_json(text: str) -> dict:
     text = text.strip()
-    if text.startswith('\\`\\`\\`'):
-        text = re.sub(r'^\\`\\`\\`(?:json)?\\s*', '', text)
-        text = re.sub(r'\\s*\\`\\`\\`$', '', text)
+    fence = chr(96) * 3
+    if text.startswith(fence):
+        lines = text.splitlines()
+        if lines:
+            lines = lines[1:]
+        if lines and lines[-1].strip() == fence:
+            lines = lines[:-1]
+        text = '\n'.join(lines).strip()
+
     try:
         value = json.loads(text)
         if isinstance(value, dict):
             return value
     except json.JSONDecodeError:
         pass
+
     start = text.find('{')
     end = text.rfind('}')
     if start >= 0 and end > start:
         value = json.loads(text[start:end + 1])
         if isinstance(value, dict):
             return value
+
     raise CreativeError('Модель вернула некорректный JSON для презентации.')
 
 
@@ -74,8 +82,8 @@ class CreativeService:
             input=(
                 'Напиши готовое письмо по заданию ниже. По умолчанию используй русский язык, '
                 'если пользователь явно не просит другой. Верни только готовый текст: сначала '
-                'строка "Тема: ...", затем тело письма. Не выдумывай факты, имена или адреса.\\n\\n'
-                f'Задание:\\n{brief}'
+                'строка "Тема: ...", затем тело письма. Не выдумывай факты, имена или адреса.\n\n'
+                f'Задание:\n{brief}'
             ),
         )
         return response.output_text.strip()
@@ -93,10 +101,11 @@ class CreativeService:
                 'по схеме: {"title":"...", "subtitle":"...", "slides":[{"title":"...",'
                 '"bullets":["...","..."]}]}. Заголовочный слайд НЕ включай в slides. '
                 f'Нужно {slides - 1} содержательных слайдов. На каждом 3-6 коротких пунктов. '
-                'Не выдумывай конкретные цифры и источники, если их нет в задании.\\n\\n'
-                f'Задание пользователя:\\n{brief}'
+                'Не выдумывай конкретные цифры и источники, если их нет в задании.\n\n'
+                f'Задание пользователя:\n{brief}'
             ),
         )
+
         deck = _extract_json(response.output_text)
         title = str(deck.get('title') or 'Презентация')
         subtitle = str(deck.get('subtitle') or '')
@@ -148,6 +157,7 @@ class CreativeService:
         )
         if not result.data or not result.data[0].b64_json:
             raise CreativeError('Image API не вернул изображение.')
+
         data = base64.b64decode(result.data[0].b64_json)
         path = self.output_dir / f'image_{uuid.uuid4().hex[:10]}.png'
         path.write_bytes(data)
@@ -158,6 +168,7 @@ class CreativeService:
 
     def _create_video_sync(self, prompt: str) -> Path:
         client = self._client()
+
         try:
             video = client.videos.create(
                 model=self.settings.openai_video_model,
@@ -180,7 +191,9 @@ class CreativeService:
 
         if getattr(video, 'status', None) != 'completed':
             err = getattr(getattr(video, 'error', None), 'message', None)
-            raise CreativeError(err or f'Генерация видео завершилась со статусом {video.status}')
+            raise CreativeError(
+                err or f'Генерация видео завершилась со статусом {video.status}'
+            )
 
         content = client.videos.download_content(video.id, variant='video')
         path = self.output_dir / f'video_{uuid.uuid4().hex[:10]}.mp4'
@@ -195,7 +208,7 @@ class CreativeService:
 
     def _interpret_tarot_sync(self, question: str, cards: list[TarotCard]) -> str:
         client = self._client()
-        spread = '\\n'.join(
+        spread = '\n'.join(
             f'{idx + 1}. {card.name} — {card.orientation}'
             for idx, card in enumerate(cards)
         )
@@ -205,9 +218,9 @@ class CreativeService:
                 'Сделай вдумчивую интерпретацию расклада Таро на русском языке. '
                 'Подавай это как символический инструмент для размышления, а не как гарантированное '
                 'предсказание будущего. Структура: значение каждой карты, общая картина, практический '
-                'вопрос для размышления. Не утверждай неизбежность событий.\\n\\n'
-                f'Вопрос: {question or "Общий расклад"}\\n'
-                f'Карты:\\n{spread}'
+                'вопрос для размышления. Не утверждай неизбежность событий.\n\n'
+                f'Вопрос: {question or "Общий расклад"}\n'
+                f'Карты:\n{spread}'
             ),
         )
         return response.output_text.strip()
