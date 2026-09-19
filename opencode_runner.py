@@ -113,13 +113,17 @@ class OpenCodeRunner:
             return self._resolved_model, None
 
         provider = self.settings.opencode_provider
-        cmd = [self.settings.opencode_bin, 'models', provider]
+
+        # Compatibility: older OpenCode builds do not accept
+        # "opencode models <provider>". Listing all models works across both
+        # old and new CLIs, so filter provider/model lines locally.
+        cmd = [self.settings.opencode_bin, 'models']
         rc, raw = await self._spawn(project, cmd, env, timeout=30)
         text = _clean_output(raw)
 
         if rc != 0:
             return None, (
-                f'Не удалось получить модели провайдера {provider!r}.\n'
+                f'Не удалось получить список моделей OpenCode.\n'
                 f'{text or f"opencode models rc={rc}"}\n\n'
                 'Подключите OpenAI через: opencode → /connect → OpenAI → ChatGPT Plus/Pro.'
             )
@@ -250,18 +254,27 @@ class OpenCodeRunner:
         )
         models_rc, models_raw = await self._spawn(
             workspace,
-            [self.settings.opencode_bin, 'models', 'openai'],
+            [self.settings.opencode_bin, 'models'],
             env,
             timeout=30,
         )
 
         auth = _clean_output(auth_raw) or f'auth list rc={auth_rc}'
-        models = _clean_output(models_raw) or f'openai models rc={models_rc}'
+        all_models = _clean_output(models_raw)
+        prefix = self.settings.opencode_provider + '/'
+        filtered = [
+            line.strip()
+            for line in all_models.splitlines()
+            if line.strip().startswith(prefix)
+        ]
+        models = '\n'.join(filtered) or (
+            f'Нет моделей {prefix}* (opencode models rc={models_rc})'
+        )
 
         return (
             'OpenCode auth:\n'
             + auth
-            + '\n\nOpenAI models:\n'
+            + f'\n\n{self.settings.opencode_provider} models:\n'
             + models
             + '\n\nOPENCODE_PROVIDER=' + self.settings.opencode_provider
             + '\nOPENCODE_MODEL=' + (self.settings.opencode_model or '<auto from provider>')
