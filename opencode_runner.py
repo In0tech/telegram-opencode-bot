@@ -114,37 +114,85 @@ class OpenCodeRunner:
 
         provider = self.settings.opencode_provider
 
-        # Compatibility: older OpenCode builds do not accept
-        # "opencode models <provider>". Listing all models works across both
-        # old and new CLIs, so filter provider/model lines locally.
-        cmd = [self.settings.opencode_bin, 'models']
-        rc, raw = await self._spawn(project, cmd, env, timeout=30)
+        # Compatibility across OpenCode versions: list all models, then filter.
+        rc, raw = await self._spawn(
+            project,
+            [self.settings.opencode_bin, 'models'],
+            env,
+            timeout=30,
+        )
         text = _clean_output(raw)
-
         if rc != 0:
             return None, (
-                f'Не удалось получить список моделей OpenCode.\n'
-                f'{text or f"opencode models rc={rc}"}\n\n'
-                'Подключите OpenAI через: opencode → /connect → OpenAI → ChatGPT Plus/Pro.'
+                'Не удалось получить список моделей OpenCode.\n'
+                f'{text or f"opencode models rc={rc}"}'
             )
 
-        candidates = []
         prefix = provider + '/'
+        candidates: list[str] = []
         for line in text.splitlines():
             value = line.strip()
             if value.startswith(prefix):
-                candidates.append(value.split()[0])
+                model = value.split()[0]
+                if model not in candidates:
+                    candidates.append(model)
 
         if not candidates:
             return None, (
-                f'У OpenCode нет доступных моделей провайдера {provider!r}.\n'
-                'Это означает, что ChatGPT OAuth не подключён или провайдер недоступен.\n'
-                'Запустите: opencode → /connect → OpenAI → ChatGPT Plus/Pro, '
-                'затем проверьте: opencode models openai'
+                f'У OpenCode нет моделей {prefix}*. '
+                'Проверьте OAuth через /connect → OpenAI → ChatGPT Plus/Pro.'
             )
 
-        self._resolved_model = candidates[0]
-        return self._resolved_model, None
+        # Prefer general ChatGPT models over Codex-only variants.
+        def rank(model: str) -> tuple[int, int, str]:
+            name = model.split('/', 1)[-1].lower()
+            if 'codex' in name:
+                group = 50
+            elif 'gpt-5.6-sol' in name:
+                group = 0
+            elif 'gpt-5.6-luna' in name:
+                group = 1
+            elif 'gpt-5.5' in name:
+                group = 2
+            elif 'gpt-6-astra' in name:
+                group = 3
+            else:
+                group = 10
+            fast = 1 if name.endswith('-fast') else 0
+            return group, fast, model
+
+        candidates.sort(key=rank)
+
+        errors: list[str] = []
+        for model in candidates:
+            probe_cmd = [
+                self.settings.opencode_bin,
+                'run',
+                '--standalone',
+                '--model',
+                model,
+                'Ответь одним словом: OK',
+            ]
+            probe_rc, probe_raw = await self._spawn(
+                project,
+                probe_cmd,
+                env,
+                timeout=45,
+            )
+            probe_text = _clean_output(probe_raw)
+            if probe_rc == 0:
+                self._resolved_model = model
+                return model, None
+
+            errors.append(f'{model}: {probe_text or f"rc={probe_rc}"}')
+
+        preview = '\n'.join(errors[:5])
+        return None, (
+            'Ни одна модель OpenAI из текущего списка не прошла проверку через '
+            'ChatGPT-account OAuth.\n\n'
+            + preview
+            + '\n\nПроверьте авторизацию OpenAI и доступность модели вручную.'
+        )
 
     async def _spawn(
         self,
