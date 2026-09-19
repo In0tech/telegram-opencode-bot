@@ -14,7 +14,7 @@ def detect_test_command(project: Path, requested: str | None = None) -> list[str
     if choice in {'python', 'pytest'}:
         return ['python3', '-m', 'pytest', '-q']
     if choice in {'npm', 'node'}:
-        return ['npm', 'test', '--', '--runInBand']
+        return ['npm', 'test']
     if choice == 'pnpm':
         return ['pnpm', 'test']
     if choice == 'go':
@@ -25,7 +25,7 @@ def detect_test_command(project: Path, requested: str | None = None) -> list[str
     if (project / 'pytest.ini').exists() or (project / 'pyproject.toml').exists() or (project / 'tests').is_dir():
         return ['python3', '-m', 'pytest', '-q']
     if (project / 'package.json').exists():
-        return ['npm', 'test', '--', '--runInBand']
+        return ['npm', 'test']
     if (project / 'go.mod').exists():
         return ['go', 'test', './...']
     if (project / 'Cargo.toml').exists():
