@@ -9,7 +9,6 @@ from pathlib import Path
 from config import Settings
 from security import opencode_config, system_instruction
 
-# ANSI/VT100 escape sequences produced by interactive-style CLI output.
 _ANSI_RE = re.compile(
     r'(?:\x1B[@-_][0-?]*[ -/]*[@-~])'
     r'|(?:\x9B[0-?]*[ -/]*[@-~])'
@@ -26,7 +25,6 @@ def _clean_output(raw: bytes) -> str:
     text = raw.decode(errors='replace')
     text = _ANSI_RE.sub('', text)
     text = text.replace('\r\n', '\n').replace('\r', '\n')
-    # Avoid huge blocks of empty lines after stripping terminal control codes.
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
@@ -37,6 +35,7 @@ class OpenCodeRunner:
 
     async def run(self, project: Path, mode: str, prompt: str) -> RunResult:
         project = project.resolve()
+
         if not project.is_dir() or not (project / '.git').exists():
             return RunResult(
                 2,
@@ -45,32 +44,26 @@ class OpenCodeRunner:
 
         env = os.environ.copy()
         env['OPENCODE_CONFIG_CONTENT'] = opencode_config(mode)
-
-        # Some CLI/runtime layers inspect PWD in addition to process.cwd().
-        # Keep both values aligned with the selected project.
         env['PWD'] = str(project)
 
         full_prompt = (
             f'{system_instruction(mode)}\n\n'
             f'АКТИВНЫЙ ПРОЕКТ: {project}\n'
-            'Считай этот каталог единственной рабочей директорией задания. '
-            'Не используй данные из других локальных проектов.\n\n'
+            'Работай только с этим Git-проектом и его файлами. '
+            'Не используй контекст других локальных репозиториев.\n\n'
             f'ЗАДАНИЕ ПОЛЬЗОВАТЕЛЯ:\n{prompt.strip()}'
         )
 
-        # OpenCode v2 normally connects local clients to a shared background
-        # server. For a Telegram remote-control bot that is undesirable:
-        # a shared server may retain a Location from another project.
+        # The installed OpenCode build supports --standalone for "run",
+        # but does not support --dir. Project selection is therefore pinned
+        # with subprocess cwd, while PWD is kept in sync.
         #
-        # --standalone creates a private server for this request.
-        # --dir pins OpenCode's Location to the project explicitly.
-        # cwd and PWD are also set as defence-in-depth.
+        # --standalone prevents reuse of the shared background service and
+        # avoids cross-project session/location leakage.
         cmd = [
             self.settings.opencode_bin,
             'run',
             '--standalone',
-            '--dir',
-            str(project),
             '--auto',
         ]
 
@@ -81,7 +74,7 @@ class OpenCodeRunner:
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,
-            cwd=project,
+            cwd=str(project),
             env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
