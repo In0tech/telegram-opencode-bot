@@ -23,9 +23,11 @@ class Settings:
     telegram_bot_token: str
     allowed_user_ids: frozenset[int]
     project_root: Path
+    state_dir: Path
     opencode_bin: str
     opencode_model: str | None
     task_timeout_seconds: int
+    test_timeout_seconds: int
     max_output_chars: int
     protected_branches: frozenset[str]
     log_level: str
@@ -43,6 +45,11 @@ class Settings:
         root = Path(os.getenv('PROJECT_ROOT', '~/projects')).expanduser().resolve()
         root.mkdir(parents=True, exist_ok=True)
 
+        state_dir = Path(
+            os.getenv('STATE_DIR', '~/.local/state/telegram-opencode-bot')
+        ).expanduser().resolve()
+        state_dir.mkdir(parents=True, exist_ok=True)
+
         protected = frozenset(
             x.strip() for x in os.getenv(
                 'PROTECTED_BRANCHES', 'main,master,production,prod'
@@ -53,9 +60,11 @@ class Settings:
             telegram_bot_token=token,
             allowed_user_ids=allowed,
             project_root=root,
+            state_dir=state_dir,
             opencode_bin=os.getenv('OPENCODE_BIN', 'opencode').strip() or 'opencode',
             opencode_model=os.getenv('OPENCODE_MODEL', '').strip() or None,
             task_timeout_seconds=int(os.getenv('TASK_TIMEOUT_SECONDS', '1800')),
+            test_timeout_seconds=int(os.getenv('TEST_TIMEOUT_SECONDS', '900')),
             max_output_chars=int(os.getenv('MAX_OUTPUT_CHARS', '16000')),
             protected_branches=protected,
             log_level=os.getenv('LOG_LEVEL', 'INFO').upper(),
