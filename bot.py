@@ -57,7 +57,7 @@ logging.basicConfig(
 
 log = logging.getLogger('telegram-opencode-bot')
 runner = OpenCodeRunner(settings)
-creative = CreativeService(settings)
+creative = CreativeService(settings, runner)
 sessions = SessionStore(settings.state_dir / 'sessions.json')
 locks: dict[int, asyncio.Lock] = {}
 creative_locks: dict[int, asyncio.Lock] = {}
@@ -123,8 +123,8 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         '/logs [N] — последние строки лога бота\n'
         '\nТворческие команды:\n'
         '/presentation [N] | ТЕМА — редактируемый PPTX\n'
-        '/image ОПИСАНИЕ — сгенерировать изображение\n'
-        '/video ОПИСАНИЕ — сгенерировать видео\n'
+        '/image ОПИСАНИЕ — подготовить промпт для ChatGPT Image\n'
+        '/video ОПИСАНИЕ — подготовить промпт для ChatGPT/Sora\n'
         '/email ЗАДАНИЕ — написать письмо\n'
         '/tarot [N] | ВОПРОС — расклад Таро\n'
         '/cancel — отменить ожидающее подтверждение'
@@ -585,14 +585,14 @@ async def image_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     async with lock:
         try:
-            await update.effective_message.reply_text('Генерирую изображение...')
-            path = await creative.create_image(prompt)
-            with path.open('rb') as fh:
-                await update.effective_message.reply_document(
-                    document=fh,
-                    filename=path.name,
-                    caption='✅ Изображение готово',
-                )
+            await update.effective_message.reply_text(
+                'Готовлю промпт для генерации изображения в ChatGPT...'
+            )
+            image_prompt = await creative.create_image_prompt(prompt)
+            await send_long(
+                update,
+                'Готовый промпт для ChatGPT Image:\n\n' + image_prompt
+            )
         except CreativeError as exc:
             await update.effective_message.reply_text(f'Ошибка изображения: {exc}')
         except Exception as exc:
@@ -617,17 +617,13 @@ async def video_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     async with lock:
         try:
             await update.effective_message.reply_text(
-                'Запускаю генерацию видео. Это может занять несколько минут. '
-                'OpenAI Sora API объявлен устаревшим и запланирован к отключению 24.09.2026.'
+                'Готовлю промпт для генерации видео в ChatGPT/Sora...'
             )
-            path = await creative.create_video(prompt)
-            with path.open('rb') as fh:
-                await update.effective_message.reply_video(
-                    video=fh,
-                    filename=path.name,
-                    caption='✅ Видео готово',
-                    supports_streaming=True,
-                )
+            video_prompt = await creative.create_video_prompt(prompt)
+            await send_long(
+                update,
+                'Готовый промпт для ChatGPT/Sora:\n\n' + video_prompt
+            )
         except CreativeError as exc:
             await update.effective_message.reply_text(f'Ошибка видео: {exc}')
         except Exception as exc:
