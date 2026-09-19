@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import re
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,8 +32,29 @@ def _clean_output(raw: bytes) -> str:
     return text.strip()
 
 
+def _extract_error_message(event: dict) -> str | None:
+    error = event.get('error')
+    if isinstance(error, str) and error:
+        return error
+    if isinstance(error, dict):
+        data = error.get('data')
+        if isinstance(data, dict):
+            message = data.get('message')
+            if isinstance(message, str) and message:
+                return message
+        for key in ('message', 'name'):
+            value = error.get(key)
+            if isinstance(value, str) and value:
+                return value
+    message = event.get('message')
+    if isinstance(message, str) and message:
+        return message
+    return None
+
+
 def _parse_json_stream(raw: bytes) -> tuple[str, str | None]:
     texts: list[str] = []
+    errors: list[str] = []
     session_id: str | None = None
     fallback: list[str] = []
 
@@ -46,19 +68,29 @@ def _parse_json_stream(raw: bytes) -> tuple[str, str | None]:
             fallback.append(line)
             continue
 
-        if not session_id and isinstance(event, dict):
+        if not isinstance(event, dict):
+            continue
+
+        if not session_id:
             value = event.get('sessionID')
             if isinstance(value, str) and value:
                 session_id = value
 
-        if isinstance(event, dict) and event.get('type') == 'text':
+        if event.get('type') == 'text':
             part = event.get('part')
             if isinstance(part, dict):
                 text = part.get('text')
                 if isinstance(text, str) and text:
                     texts.append(text)
 
+        if event.get('type') == 'error':
+            message = _extract_error_message(event)
+            if message:
+                errors.append(message)
+
     output = '\n'.join(texts).strip()
+    if not output and errors:
+        output = 'OpenCode error: ' + '\n'.join(errors)
     if not output:
         output = '\n'.join(fallback).strip()
     return output, session_id
@@ -67,6 +99,85 @@ def _parse_json_stream(raw: bytes) -> tuple[str, str | None]:
 class OpenCodeRunner:
     def __init__(self, settings: Settings):
         self.settings = settings
+
+    async def _spawn(
+        self,
+        project: Path,
+        cmd: list[str],
+        env: dict[str, str],
+        timeout: int | None = None,
+    ) -> tuple[int, bytes]:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                cwd=str(project),
+                env=env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+        except FileNotFoundError:
+            return 127, (
+                'OpenCode не найден. Проверенный путь: '
+                f'{self.settings.opencode_bin}. '
+                'Проверьте "which opencode" и OPENCODE_BIN в .env.'
+            ).encode()
+
+        try:
+            stdout, _ = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=timeout or self.settings.task_timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.communicate()
+            return 124, b'OpenCode stopped: timeout exceeded.'
+
+        return proc.returncode or 0, stdout
+
+    async def _find_session_id(
+        self,
+        project: Path,
+        env: dict[str, str],
+        title: str,
+    ) -> str | None:
+        cmd = [
+            self.settings.opencode_bin,
+            'session',
+            'list',
+            '--max-count',
+            '30',
+            '--format',
+            'json',
+        ]
+        rc, raw = await self._spawn(project, cmd, env, timeout=30)
+        if rc != 0:
+            return None
+
+        try:
+            items = json.loads(raw.decode(errors='replace'))
+        except json.JSONDecodeError:
+            return None
+
+        if not isinstance(items, list):
+            return None
+
+        project_path = str(project.resolve())
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            if item.get('title') != title:
+                continue
+            directory = item.get('directory')
+            if isinstance(directory, str):
+                try:
+                    if str(Path(directory).resolve()) != project_path:
+                        continue
+                except OSError:
+                    continue
+            session_id = item.get('id')
+            if isinstance(session_id, str) and session_id:
+                return session_id
+        return None
 
     async def run(
         self,
@@ -79,7 +190,11 @@ class OpenCodeRunner:
         project = project.resolve()
 
         if not project.is_dir() or not (project / '.git').exists():
-            return RunResult(2, f'OpenCode не запущен: некорректный Git-проект: {project}')
+            return RunResult(
+                2,
+                f'OpenCode не запущен: некорректный Git-проект: {project}',
+                session_id,
+            )
 
         env = os.environ.copy()
         env['OPENCODE_CONFIG_CONTENT'] = opencode_config(mode)
@@ -95,63 +210,54 @@ class OpenCodeRunner:
 
         cmd = [self.settings.opencode_bin, 'run', '--standalone', '--auto']
 
-        # For a new named session, JSON mode is used once to capture sessionID.
-        # Existing sessions use normal output because some OpenCode versions
-        # have known JSON streaming issues when resuming long sessions.
-        capture_session = session_id is None
-        if capture_session:
-            cmd += ['--format', 'json']
-            if session_title:
-                cmd += ['--title', session_title]
-        else:
+        discovery_title: str | None = None
+        if session_id:
             cmd += ['--session', session_id]
+        else:
+            base_title = session_title or f'telegram-{project.name}'
+            discovery_title = f'{base_title}:{uuid.uuid4().hex[:8]}'
+            cmd += ['--title', discovery_title]
 
         if self.settings.opencode_model:
             cmd += ['--model', self.settings.opencode_model]
 
         cmd.append(full_prompt)
 
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                cwd=str(project),
-                env=env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-            )
-        except FileNotFoundError:
-            return RunResult(
-                127,
-                'OpenCode не найден. Проверенный путь: '
-                f'{self.settings.opencode_bin}. '
-                'Проверьте "which opencode" и при необходимости задайте '
-                'OPENCODE_BIN=/полный/путь/к/opencode в .env.',
-                session_id,
+        rc, stdout = await self._spawn(project, cmd, env)
+
+        text = _clean_output(stdout)
+
+        # If a future OpenCode version happens to emit JSON despite default mode,
+        # try to extract a meaningful error instead of showing an empty response.
+        if not text and stdout:
+            parsed, discovered = _parse_json_stream(stdout)
+            text = parsed
+            if discovered and not session_id:
+                session_id = discovered
+
+        discovered_session = session_id
+        if rc == 0 and not discovered_session and discovery_title:
+            discovered_session = await self._find_session_id(
+                project,
+                env,
+                discovery_title,
             )
 
-        try:
-            stdout, _ = await asyncio.wait_for(
-                proc.communicate(),
-                timeout=self.settings.task_timeout_seconds,
-            )
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.communicate()
-            return RunResult(124, 'OpenCode остановлен: превышен лимит времени.', session_id)
+        if rc == 124:
+            text = 'OpenCode остановлен: превышен лимит времени.'
 
-        if capture_session:
-            text, discovered_session = _parse_json_stream(stdout)
-            active_session = discovered_session
-        else:
-            text = _clean_output(stdout)
-            active_session = session_id
-
-        text = _clean_output(text.encode())
         if len(text) > self.settings.max_output_chars:
             text = '[...начало вывода сокращено...]\n' + text[-self.settings.max_output_chars:]
 
+        if not text:
+            text = (
+                'OpenCode завершился без текстового вывода. '
+                f'Код возврата: {rc}. Запустите /logs и проверьте OpenCode вручную '
+                'из каталога проекта.'
+            )
+
         return RunResult(
-            proc.returncode or 0,
-            text or '(OpenCode не вернул текст)',
-            active_session,
+            rc,
+            text,
+            discovered_session,
         )
