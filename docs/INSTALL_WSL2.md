@@ -468,3 +468,43 @@ gh auth status
 STATE_DIR=/home/YOUR_USER/.local/state/telegram-opencode-bot
 TEST_TIMEOUT_SECONDS=900
 ```
+
+
+## Настройка творческих функций
+
+После обновления зависимостей:
+
+```bash
+cd ~/telegram-opencode-bot
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+Добавьте API key в `.env`:
+
+```env
+OPENAI_API_KEY=sk-...
+```
+
+Проверьте, что ключ не попал в Git:
+
+```bash
+git status --ignored
+```
+
+Перезапустите бота:
+
+```bash
+sudo systemctl restart telegram-opencode-bot@$USER.service
+```
+
+Затем проверьте:
+
+```text
+/email Напиши короткое тестовое письмо
+/tarot Общий расклад на день
+/image Минималистичный футуристичный серверный зал
+/presentation 5 | Тестовая презентация про кибербезопасность
+```
+
+Команда `/video` использует deprecated Sora API, который OpenAI планирует отключить 24.09.2026.
