@@ -8,6 +8,10 @@ Type=simple
 User=%i
 WorkingDirectory=/home/%i/telegram-opencode-bot
 EnvironmentFile=/home/%i/telegram-opencode-bot/.env
+Environment="HOME=/home/%i"
+Environment="XDG_CONFIG_HOME=/home/%i/.config"
+Environment="XDG_DATA_HOME=/home/%i/.local/share"
+Environment="XDG_STATE_HOME=/home/%i/.local/state"
 Environment="PATH=/home/%i/.opencode/bin:/home/%i/.local/bin:/home/%i/.local/share/pnpm:/home/%i/.bun/bin:/home/%i/.npm-global/bin:/usr/local/bin:/usr/bin:/bin"
 ExecStart=/home/%i/telegram-opencode-bot/.venv/bin/python /home/%i/telegram-opencode-bot/bot.py
 Restart=on-failure
