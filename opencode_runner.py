@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import pwd
 import re
 import uuid
 from dataclasses import dataclass
@@ -101,6 +102,22 @@ class OpenCodeRunner:
         self.settings = settings
         self._resolved_model: str | None = None
 
+    def _oauth_env(self, source: dict[str, str] | None = None) -> dict[str, str]:
+        env = dict(source or os.environ)
+
+        # Model discovery/auth must see the user's real OpenCode config and
+        # OAuth credentials. OPENCODE_CONFIG_CONTENT is only for the actual
+        # guarded task run; keeping it here can shadow the normal config.
+        env.pop('OPENCODE_CONFIG_CONTENT', None)
+
+        user = pwd.getpwuid(os.getuid())
+        home = Path(user.pw_dir).resolve()
+        env['HOME'] = str(home)
+        env.setdefault('XDG_CONFIG_HOME', str(home / '.config'))
+        env.setdefault('XDG_DATA_HOME', str(home / '.local' / 'share'))
+        env.setdefault('XDG_STATE_HOME', str(home / '.local' / 'state'))
+        return env
+
     async def _resolve_model(
         self,
         project: Path,
@@ -113,12 +130,14 @@ class OpenCodeRunner:
             return self._resolved_model, None
 
         provider = self.settings.opencode_provider
+        oauth_env = self._oauth_env(env)
 
         # Compatibility across OpenCode versions: list all models, then filter.
+        # Use the real user OpenCode/OAuth environment, not task runtime config.
         rc, raw = await self._spawn(
             project,
             [self.settings.opencode_bin, 'models'],
-            env,
+            oauth_env,
             timeout=30,
         )
         text = _clean_output(raw)
@@ -176,7 +195,7 @@ class OpenCodeRunner:
             probe_rc, probe_raw = await self._spawn(
                 project,
                 probe_cmd,
-                env,
+                oauth_env,
                 timeout=45,
             )
             probe_text = _clean_output(probe_raw)
@@ -291,7 +310,7 @@ class OpenCodeRunner:
     async def provider_status(self) -> str:
         workspace = (self.settings.state_dir / 'chatgpt-workspace').resolve()
         workspace.mkdir(parents=True, exist_ok=True)
-        env = os.environ.copy()
+        env = self._oauth_env()
         env['PWD'] = str(workspace)
 
         auth_rc, auth_raw = await self._spawn(
