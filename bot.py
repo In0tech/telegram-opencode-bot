@@ -106,6 +106,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         'OpenCode Remote Bot готов.\n\n'
         '/projects — выбрать проект кнопкой\n'
         '/project NAME — выбрать проект текстом\n'
+        '/provider — проверить OpenCode OAuth и модели OpenAI\n'
         '/sessions — сессии OpenCode текущего проекта\n'
         '/newsession NAME — новая долговременная сессия\n'
         '/session NAME — переключить сессию\n'
@@ -129,6 +130,17 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         '/tarot [N] | ВОПРОС — расклад Таро\n'
         '/cancel — отменить ожидающее подтверждение'
     )
+
+
+async def provider_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not authorized(update):
+        return await deny(update)
+    try:
+        text = await runner.provider_status()
+        await send_long(update, text)
+    except Exception as exc:
+        log.exception('Provider diagnostics failed')
+        await update.effective_message.reply_text(f'Ошибка provider diagnostics: {exc}')
 
 
 async def projects_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -778,7 +790,7 @@ def main() -> None:
 
     for name, handler in [
         ('start', start_cmd), ('help', start_cmd),
-        ('projects', projects_cmd), ('project', project_cmd),
+        ('projects', projects_cmd), ('project', project_cmd), ('provider', provider_cmd),
         ('sessions', sessions_cmd), ('newsession', newsession_cmd), ('session', session_cmd),
         ('chat', chat_cmd), ('plan', plan_cmd), ('exec', exec_cmd),
         ('tests', tests_cmd), ('status', status_cmd), ('diff', diff_cmd),
