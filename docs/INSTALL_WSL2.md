@@ -385,6 +385,11 @@ sudo cp systemd/telegram-opencode-bot.service \
 
 sudo systemctl daemon-reload
 sudo systemctl enable --now telegram-opencode-bot@$USER.service
+
+# После каждого обновления systemd unit из Git:
+# sudo cp systemd/telegram-opencode-bot.service /etc/systemd/system/telegram-opencode-bot@.service
+# sudo systemctl daemon-reload
+# sudo systemctl restart telegram-opencode-bot@$USER.service
 ```
 
 Проверка:
@@ -508,3 +513,23 @@ sudo systemctl restart telegram-opencode-bot@$USER.service
 ```
 
 Команда `/video` использует deprecated Sora API, который OpenAI планирует отключить 24.09.2026.
+
+
+## OpenCode и systemd PATH
+
+После установки OpenCode проверьте абсолютный путь:
+
+```bash
+command -v opencode
+readlink -f "$(command -v opencode)"
+```
+
+Бот автоматически ищет OpenCode в популярных пользовательских каталогах. Для максимальной предсказуемости можно записать абсолютный путь в `.env`:
+
+```env
+OPENCODE_BIN=/home/YOUR_USER/.opencode/bin/opencode
+```
+
+Если `command -v opencode` показывает другой путь — используйте именно его.
+
+После изменения unit-файла из репозитория недостаточно обычного restart; сначала скопируйте новый unit и выполните `daemon-reload`.
