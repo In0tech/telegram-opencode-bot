@@ -25,10 +25,10 @@ if [[ -z "$MODEL" ]]; then
       awk -v p="$PROVIDER/" '$1 ~ "^" p {print $1}' |
       awk '!seen[$0]++' |
       awk '
-        /gpt-5\.6-sol/ && !/-fast$/ {print "00 " $0; next}
-        /gpt-5\.6-luna/ && !/-fast$/ {print "01 " $0; next}
-        /gpt-5\.5$/ {print "02 " $0; next}
-        /gpt-6-astra/ && !/-fast$/ {print "03 " $0; next}
+        /gpt-5\.6-luna/ && !/-fast$/ {print "00 " $0; next}
+        /gpt-5\.5$/ {print "01 " $0; next}
+        /gpt-6-astra/ && !/-fast$/ {print "02 " $0; next}
+        /gpt-5\.6-sol/ && !/-fast$/ {print "20 " $0; next}
         /codex/ {print "90 " $0; next}
         {print "50 " $0}
       ' |
@@ -41,7 +41,7 @@ if [[ -z "$MODEL" ]]; then
   for candidate in "${CANDIDATES[@]}"; do
     echo "  trying $candidate"
     set +e
-    OUTPUT="$("$OPENCODE_BIN" run --standalone --model "$candidate" "Ответь одним словом: OK" 2>&1)"
+    OUTPUT="$(timeout 45s "$OPENCODE_BIN" run --standalone --model "$candidate" "Ответь одним словом: OK" 2>&1)"
     RC=$?
     set -e
     if [[ $RC -eq 0 ]]; then
@@ -49,7 +49,11 @@ if [[ -z "$MODEL" ]]; then
       echo "  OK: $candidate"
       break
     fi
-    printf '  failed: %s\n' "$OUTPUT" | tail -n 3
+    if [[ $RC -eq 124 ]]; then
+      echo "  timed out: $candidate"
+    else
+      printf '  failed: %s\n' "$OUTPUT" | tail -n 3
+    fi
   done
 fi
 
@@ -109,4 +113,4 @@ PY
 
 echo
 echo "Verification:"
-"$OPENCODE_BIN" run --standalone --model "$MODEL" "Ответь одним словом: OK"
+timeout 45s "$OPENCODE_BIN" run --standalone --model "$MODEL" "Ответь одним словом: OK"
