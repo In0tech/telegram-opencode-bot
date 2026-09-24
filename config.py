@@ -62,7 +62,6 @@ class Settings:
     protected_branches: frozenset[str]
     log_level: str
 
-
     @classmethod
     def from_env(cls) -> 'Settings':
         token = os.getenv('TELEGRAM_BOT_TOKEN', '').strip()
@@ -87,6 +86,9 @@ class Settings:
             ).split(',') if x.strip()
         )
 
+        # Temporary compatibility default: gpt-5.6-sol currently has known
+        # OpenCode/Codex stability regressions. Explicit OPENCODE_MODEL still wins.
+        default_model = 'openai/gpt-5.6-luna'
 
         return cls(
             telegram_bot_token=token,
@@ -94,7 +96,7 @@ class Settings:
             project_root=root,
             state_dir=state_dir,
             opencode_bin=_resolve_executable(os.getenv('OPENCODE_BIN', 'opencode')),
-            opencode_model=os.getenv('OPENCODE_MODEL', '').strip() or None,
+            opencode_model=os.getenv('OPENCODE_MODEL', default_model).strip() or None,
             opencode_provider=os.getenv('OPENCODE_PROVIDER', 'openai').strip() or 'openai',
             task_timeout_seconds=int(os.getenv('TASK_TIMEOUT_SECONDS', '1800')),
             test_timeout_seconds=int(os.getenv('TEST_TIMEOUT_SECONDS', '900')),
